@@ -35,6 +35,7 @@ export const api = {
   state: since => call('/state?since=' + (since || 0)),
   setBaby: b => call('/baby', { method: 'POST', body: b }),
   invite: email => call('/invite', { method: 'POST', body: { email } }),
+  saveSettings: settings => call('/settings', { method: 'POST', body: settings }),
   pushEntries: entries => call('/entries', { method: 'POST', body: { entries } }),
   shiftRequest: note => call('/shifts/request', { method: 'POST', body: { note } }),
   shiftAccept: (plan, until) => call('/shifts/accept', { method: 'POST', body: { plan, until } }),

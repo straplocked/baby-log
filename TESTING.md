@@ -6,6 +6,8 @@ Live-with-it notes for the testing period. Add entries as they happen — a one-
 
 | Date | Who | What happened / what I wanted | Severity |
 |---|---|---|---|
+| 2026-09-02 | C+K | Cluster feeding skews the feed-rhythm average — Maddux's "every 3h-and-change" window is wrong because back-to-back feeds count as separate rhythm beats. → Fixed: feeds within 45m now group into one session for the average/plan. | 🤔 |
+| 2026-09-02 | C+K | We don't track diapers (no health reason to) but the app assumes everyone tracks everything — "0.3 diapers/day" stats are noise. Want per-household on/off for metrics, ideally with the app suggesting it. → Fixed: "What you track" toggles in History + a low-usage nudge; entries are never deleted. | 🤔 |
 | | | | |
 
 ## Questions worth answering while we use it

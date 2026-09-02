@@ -19,6 +19,21 @@ const TYPES = [
 const T = k => TYPES.find(t => t.key === k) || TYPES[0]
 const FEEDS = ['bottle', 'nurse']
 const DIAPERS = ['wet', 'dirty', 'both']
+// trackers a household can switch off — feeds are the app's spine and stay on
+const TRACKS = [
+  { key: 'pump',    label: 'Pump',    types: ['pump'] },
+  { key: 'diapers', label: 'Diapers', types: DIAPERS },
+  { key: 'sleep',   label: 'Sleep',   types: ['sleep'] },
+  { key: 'bath',    label: 'Bath',    types: ['bath'] },
+  { key: 'meds',    label: 'Meds',    types: ['meds'] },
+]
+// feeds closer together than this are one cluster-feeding session, not a new rhythm beat
+const CLUSTER_GAP = 45 * 60000
+const sessionStarts = ts => { // ts ascending → first feed of each session
+  const out = []
+  for (let i = 0; i < ts.length; i++) if (i === 0 || ts[i] - ts[i - 1] > CLUSTER_GAP) out.push(ts[i])
+  return out
+}
 const OLIVE = '#7C8C5A'
 const DAY = 86400000
 const ME_COLOR = '#7A93B5'
@@ -28,7 +43,7 @@ const PARTNER_COLOR = '#7C8C5A'
 const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
-  'outbox', 'lastSync', 'plan', 'until', 'handbackNote']
+  'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -66,10 +81,12 @@ export default class App extends React.Component {
       me: null, partner: null, invitePending: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
+      settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
     }
     const saved = loadSaved()
     if (saved) for (const k of PERSIST) if (k in saved) this.state[k] = saved[k]
+    this.state.settings = { tracking: {}, dismissed: [], ...(this.state.settings || {}) }
     // no token → cached signed-in screens are stale
     if (!getToken() && !['splash', 'auth'].includes(this.state.screen)) this.state.screen = 'splash'
   }
@@ -126,6 +143,12 @@ export default class App extends React.Component {
         if (payload.length) await api.pushEntries(payload)
         this.setState(s => ({ outbox: s.outbox.filter(id => !ids.has(id)) }))
       }
+      if (this.state.settingsDirty) {
+        const pushed = this.state.settings
+        await api.saveSettings(pushed)
+        // a toggle mid-flight makes a new settings object — only clear if nothing changed
+        if (this.state.settings === pushed) this.setState({ settingsDirty: false })
+      }
       const st = await api.state(this.state.lastSync)
       this.applyState(st)
       if (this.state.offline) this.setState({ offline: false })
@@ -150,6 +173,10 @@ export default class App extends React.Component {
         me: st.user, partner: st.partner, invitePending: st.invitePending,
         onDutyUserId: st.onDutyUserId, serverShift: st.shift,
         lastSync: st.serverTime,
+      }
+      // server settings win unless a local toggle is still waiting to push
+      if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
+        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [] }
       }
       if (st.baby) { next.babyName = st.baby.name; if (st.baby.age) next.age = st.baby.age }
       // my active shift plan lives on the server copy
@@ -226,6 +253,7 @@ export default class App extends React.Component {
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       babyName: '', nameField: '', inviteField: '', sheet: false, shiftOpen: false, toast: null,
       plan: [], planDraft: null, planOff: [], handbackNote: '',
+      settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
     })
   }
 
@@ -270,9 +298,24 @@ export default class App extends React.Component {
     if (day) p.push(day)
     return p.filter(Boolean).join(' · ') || 'logged'
   }
+  trackOn(key) { return this.state.settings.tracking[key] !== false }
+  typeOn(typeKey) {
+    const tr = TRACKS.find(t => t.types.includes(typeKey))
+    return !tr || this.trackOn(tr.key)
+  }
+  setTracking = (key, on) => this.setState(s => ({
+    settings: { ...s.settings, tracking: { ...s.settings.tracking, [key]: on } },
+    settingsDirty: true,
+  }), () => this.flushSoon())
+  dismissRec = key => this.setState(s => ({
+    settings: { ...s.settings, dismissed: [...new Set([...s.settings.dismissed, key])] },
+    settingsDirty: true,
+  }), () => this.flushSoon())
   feedGap() {
-    const t = this.live().filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b).slice(-14)
-    const gaps = []; for (let i = 1; i < t.length; i++) gaps.push(t[i] - t[i - 1])
+    // rhythm runs between session starts — cluster feeds don't count as new beats
+    const t = this.live().filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b)
+    const starts = sessionStarts(t).slice(-14)
+    const gaps = []; for (let i = 1; i < starts.length; i++) gaps.push(starts[i] - starts[i - 1])
     return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 3 * 3600000
   }
   draftPlan() {
@@ -280,7 +323,7 @@ export default class App extends React.Component {
     let t1 = (feed ? feed.t : now) + gap; while (t1 < now + 20 * 60000) t1 += gap
     const out = [{ id: 'p1', type: 'bottle', at: t1 }, { id: 'p2', type: 'bottle', at: t1 + gap }]
     const meds = new Date(); meds.setHours(9, 0, 0, 0); if (meds.getTime() < now) meds.setDate(meds.getDate() + 1)
-    if (meds.getTime() - now < 11 * 3600000) out.push({ id: 'p3', type: 'meds', at: meds.getTime() })
+    if (this.trackOn('meds') && meds.getTime() - now < 11 * 3600000) out.push({ id: 'p3', type: 'meds', at: meds.getTime() })
     return out
   }
   lastOf(keys) { return this.live().filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
@@ -338,6 +381,7 @@ export default class App extends React.Component {
     if ((this.props.smartPrefill ?? true) === false) return null
     const feed = this.lastOf(FEEDS), dia = this.lastOf(DIAPERS)
     if (!feed && !dia) return 'bottle'
+    if (!this.trackOn('diapers')) return feed && feed.type === 'nurse' ? 'nurse' : 'bottle'
     const fMin = feed ? (Date.now() - feed.t) / 60000 : 999
     const dMin = dia ? (Date.now() - dia.t) / 60000 : 999
     if (fMin / 165 >= dMin / 150) return feed && feed.type === 'nurse' ? 'nurse' : 'bottle'
@@ -474,10 +518,10 @@ export default class App extends React.Component {
 
     const cards = [
       { keys: FEEDS, label: 'Fed', icon: 'local_drink', color: 'oklch(0.60 0.075 250)' },
-      { keys: DIAPERS, label: 'Diaper', icon: 'baby_changing_station', color: 'oklch(0.60 0.075 210)' },
-      { keys: ['sleep'], label: 'Slept', icon: 'bedtime', color: 'oklch(0.60 0.075 25)' },
-      { keys: ['bath'], label: 'Bath', icon: 'bathtub', color: 'oklch(0.60 0.075 195)' },
-    ].map(c => {
+      { keys: DIAPERS, label: 'Diaper', icon: 'baby_changing_station', color: 'oklch(0.60 0.075 210)', track: 'diapers' },
+      { keys: ['sleep'], label: 'Slept', icon: 'bedtime', color: 'oklch(0.60 0.075 25)', track: 'sleep' },
+      { keys: ['bath'], label: 'Bath', icon: 'bathtub', color: 'oklch(0.60 0.075 195)', track: 'bath' },
+    ].filter(c => !c.track || this.trackOn(c.track)).map(c => {
       const e = this.lastOf(c.keys)
       const day = e ? this.dayOf(e.t) : ''
       return { label: c.label, icon: c.icon, color: c.color, elapsed: e ? this.elapsed(e.t) : '—',
@@ -487,14 +531,19 @@ export default class App extends React.Component {
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0)
     const td = live.filter(e => e.t >= midnight.getTime())
     const oz = td.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
-    const todaySummary = td.filter(e => FEEDS.includes(e.type)).length + ' feeds · ' + oz + this.unit() + ' · ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers'
+    const todaySummary = [
+      td.filter(e => FEEDS.includes(e.type)).length + ' feeds',
+      oz + this.unit(),
+      this.trackOn('diapers') ? td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : null,
+    ].filter(Boolean).join(' · ')
 
     const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
       time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
     }))
 
-    const types = TYPES.map(t => {
+    // hidden trackers drop out of the sheet, except while editing an old entry of that type
+    const types = TYPES.filter(t => this.typeOn(t.key) || t.key === s.sel).map(t => {
       const on = t.key === s.sel
       return { label: t.label, icon: t.icon, color: t.color, on, tint: on ? 0.13 : 0.045, onTap: this.pick(t.key) }
     })
@@ -518,9 +567,9 @@ export default class App extends React.Component {
     const handoffRows = [
       { label: 'Last fed', value: feed ? this.elapsed(feed.t) + ' ago' : '—' },
       { label: 'That feed was', value: feed ? (feed.type === 'bottle' ? (this.fmtDetail(feed.detail) || feed.detail + ' ' + this.unit()) + ' bottle' : 'nursed, ' + (feed.detail ? this.fmtDetail(feed.detail) || feed.detail : 'either')) : '—' },
-      { label: 'Last diaper', value: dia ? this.elapsed(dia.t) + ' ago · ' + (dia.type === 'both' ? 'wet + dirty' : dia.type) : '—' },
-      { label: 'Last nap ended', value: sleep ? this.elapsed(sleep.t) + ' ago · ' + this.dur(sleep.detail) : '—' },
-      { label: 'Today so far', value: td.filter(e => FEEDS.includes(e.type)).length + ' feeds / ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' },
+      ...(this.trackOn('diapers') ? [{ label: 'Last diaper', value: dia ? this.elapsed(dia.t) + ' ago · ' + (dia.type === 'both' ? 'wet + dirty' : dia.type) : '—' }] : []),
+      ...(this.trackOn('sleep') ? [{ label: 'Last nap ended', value: sleep ? this.elapsed(sleep.t) + ' ago · ' + this.dur(sleep.detail) : '—' }] : []),
+      { label: 'Today so far', value: td.filter(e => FEEDS.includes(e.type)).length + ' feeds' + (this.trackOn('diapers') ? ' / ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : '') },
     ]
 
     const week = live.filter(e => e.t >= midnight.getTime() - 6 * DAY)
@@ -528,16 +577,29 @@ export default class App extends React.Component {
     const ozWk = week.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const naps = week.filter(e => e.type === 'sleep')
     const sorted = feedsWk.map(e => e.t).sort((a, b) => a - b)
+    const starts = sessionStarts(sorted)
+    const clustered = sorted.length - starts.length // feeds folded into a cluster session
     let gaps = []
-    for (let i = 1; i < sorted.length; i++) gaps.push((sorted[i] - sorted[i - 1]) / 60000)
+    for (let i = 1; i < starts.length; i++) gaps.push((starts[i] - starts[i - 1]) / 60000)
     const avgGap = gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : 0
     const longest = gaps.length ? Math.max(...gaps) : 0
     const stats = [
       { label: 'Feeds / day', value: (feedsWk.length / 7).toFixed(1), unit: 'avg' },
       { label: this.unit() + ' / day', value: Math.round(ozWk / 7), unit: 'bottles only' },
-      { label: 'Diapers / day', value: (week.filter(e => DIAPERS.includes(e.type)).length / 7).toFixed(1), unit: 'avg' },
-      { label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' },
+      ...(this.trackOn('diapers') ? [{ label: 'Diapers / day', value: (week.filter(e => DIAPERS.includes(e.type)).length / 7).toFixed(1), unit: 'avg' }] : []),
+      ...(this.trackOn('sleep') ? [{ label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' }] : []),
     ]
+
+    // nudge to switch off a daily-expected tracker that clearly isn't being used
+    let trackRec = null
+    if (week.length >= 20) {
+      for (const tr of TRACKS) {
+        if (!['diapers', 'sleep', 'meds'].includes(tr.key)) continue // baths/pumping are legitimately occasional
+        if (!this.trackOn(tr.key) || s.settings.dismissed.includes(tr.key)) continue
+        const n = week.filter(e => tr.types.includes(e.type)).length
+        if (n / 7 < 0.5) { trackRec = { key: tr.key, label: tr.label, n }; break }
+      }
+    }
 
     // shift window + plan progress
     const activeMine = sh && sh.state === 'active' && me && sh.user_id === me.id
@@ -586,8 +648,8 @@ export default class App extends React.Component {
     const reportRows = [
       { label: 'Feeds', value: sf.length ? sf.length + ' · ' + sf.map(e => this.clock(e.t)).join(', ') : 'none yet' },
       { label: 'Total from bottles', value: sOz + ' ' + this.unit() },
-      { label: 'Diapers', value: sd.length ? sd.length + ' · ' + sd.map(e => e.type).join(', ') : 'none yet' },
-      { label: 'Sleep logged', value: ss.length ? this.dur(ss.reduce((a, e) => a + (Number(e.detail) || 0), 0)) : 'none yet' },
+      ...(this.trackOn('diapers') ? [{ label: 'Diapers', value: sd.length ? sd.length + ' · ' + sd.map(e => e.type).join(', ') : 'none yet' }] : []),
+      ...(this.trackOn('sleep') ? [{ label: 'Sleep logged', value: ss.length ? this.dur(ss.reduce((a, e) => a + (Number(e.detail) || 0), 0)) : 'none yet' }] : []),
       { label: 'Last thing', value: shiftEntries.length ? T(shiftEntries[shiftEntries.length - 1].type).label + ' · ' + this.clock(shiftEntries[shiftEntries.length - 1].t) : '—' },
     ]
     const reqMins = sh?.requested_at ? Math.round((Date.now() - sh.requested_at) / 60000) : 0
@@ -682,13 +744,29 @@ export default class App extends React.Component {
       handbackNote: s.handbackNote, reportNote: noteShown, hasHandbackNote: !!noteShown,
       setHandbackNote: e => this.setState({ handbackNote: e.target.value }),
 
-      historySubtitle: feedsWk.length + ' feeds · ' + week.filter(e => DIAPERS.includes(e.type)).length + ' diapers logged',
+      historySubtitle: feedsWk.length + ' feeds' + (this.trackOn('diapers') ? ' · ' + week.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : '') + ' logged',
       stats, feedBars: this.bars(FEEDS, 'oklch(0.60 0.075 130)'), diaperBars: this.bars(DIAPERS, 'oklch(0.60 0.075 210)'),
       feedUnitLabel: 'feeds',
+      showDiaperChart: this.trackOn('diapers'),
       patternTitle: avgGap ? 'Roughly every ' + this.dur(avgGap) + ' between feeds' : 'Patterns show up after a few feeds',
       patternBody: avgGap
-        ? 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '. Handy for knowing whether the next wake-up is hunger or something else.'
+        ? 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '.'
+          + (clustered ? ' Cluster feeds (' + clustered + ' within 45m of the one before) count as one feed here, so they don’t drag the average down.' : '')
+          + ' Handy for knowing whether the next wake-up is hunger or something else.'
         : 'Keep logging — once there’s a rhythm, it shows up here.',
+      trackRec: trackRec ? {
+        title: 'Not tracking ' + trackRec.label.toLowerCase() + '?',
+        body: (trackRec.n ? 'Only ' + trackRec.n + ' logged' : 'Nothing logged') + ' in the last 7 days. Turning it off hides its cards and charts — nothing is deleted, and it comes back if you switch it on again.',
+        offLabel: 'Turn off ' + trackRec.label.toLowerCase(),
+        turnOff: () => this.setTracking(trackRec.key, false),
+        keep: () => this.dismissRec(trackRec.key),
+      } : null,
+      trackRows: TRACKS.map(tr => {
+        const on = this.trackOn(tr.key), tt = T(tr.types[0])
+        return { label: tr.label, icon: tt.icon, color: tt.color,
+          toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? '#7C8C5A' : '#CFC7B4',
+          onToggle: () => this.setTracking(tr.key, !on) }
+      }),
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode,
     }
@@ -996,6 +1074,7 @@ export default class App extends React.Component {
                 </div>
               </div>
 
+              {v.showDiaperChart && (
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px 16px 12px;margin-top:12px')}>
                 <div style={S('display:flex;align-items:center;justify-content:space-between;padding-bottom:14px')}>
                   <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>Diapers per day</div>
@@ -1014,6 +1093,7 @@ export default class App extends React.Component {
                   ))}
                 </div>
               </div>
+              )}
 
               <div style={S('background:rgba(124,140,90,0.10);border:1px solid rgba(124,140,90,0.22);border-radius:22px;padding:16px;margin-top:12px;display:flex;gap:12px;align-items:flex-start')}>
                 <Sym style={{ fontSize: 20, color: '#5F6E42', flexShrink: 0 }}>insights</Sym>
@@ -1021,6 +1101,36 @@ export default class App extends React.Component {
                   <div style={S('font-size:14.5px;font-weight:600;color:#4A5533')}>{v.patternTitle}</div>
                   <div style={S('font-size:13px;line-height:1.5;color:#5F6E42;text-wrap:pretty')}>{v.patternBody}</div>
                 </div>
+              </div>
+
+              {v.trackRec && (
+                <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:22px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px;margin-top:12px;display:flex;flex-direction:column;gap:12px')}>
+                  <div style={S('display:flex;gap:12px;align-items:flex-start')}>
+                    <Sym style={{ fontSize: 20, color: '#8C8474', flexShrink: 0 }}>visibility_off</Sym>
+                    <div style={S('display:flex;flex-direction:column;gap:3px')}>
+                      <div style={S('font-size:14.5px;font-weight:600')}>{v.trackRec.title}</div>
+                      <div style={S('font-size:13px;line-height:1.5;color:#6E6659;text-wrap:pretty')}>{v.trackRec.body}</div>
+                    </div>
+                  </div>
+                  <div style={S('display:flex;gap:8px')}>
+                    <button type="button" onClick={v.trackRec.turnOff} style={S('flex:1;background:rgba(124,140,90,0.16);border:1px solid #7C8C5A;border-radius:999px;padding:10px 6px;font-family:inherit;font-size:13px;font-weight:600;color:#4A5533;cursor:pointer')}>{v.trackRec.offLabel}</button>
+                    <button type="button" onClick={v.trackRec.keep} className="hov-cream" style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:600;color:#6E6659;cursor:pointer')}>Keep</button>
+                  </div>
+                </div>
+              )}
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>What you track</div>
+                {v.trackRows.map((r, i) => (
+                  <div key={i} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                    <Sym style={{ fontSize: 18, color: r.color }}>{r.icon}</Sym>
+                    <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{r.label}</div>
+                    <button type="button" onClick={r.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                      <Sym style={{ fontSize: 22, color: r.toggleColor }}>{r.toggleIcon}</Sym>
+                    </button>
+                  </div>
+                ))}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Feeds are always on. Turning something off hides it for both of you — old entries stay, and it all comes back if you switch it on again.</div>
               </div>
 
               {v.invitePending && (

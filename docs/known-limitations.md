@@ -6,12 +6,12 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 - **Invites don't send email.** `POST /invite` stores the invite and returns the code — the inviter must text/tell the partner the code themselves. The UI says "Invited …" which can read as "an email was sent". Fix candidates: actually send mail (needs SMTP config), or reword the UI to "share this code".
 - **"Forgot password?" is a dead link.** No reset flow exists. With no mailer, a reset would need an out-of-band mechanism (e.g. a reset script on the server, or SMTP first).
-- **No account/settings screen.** Can't change name, email, password, baby name/age (after onboarding), units, or log out anywhere except the bottom of History.
+- **No account/settings screen.** Can't change name, email, password, baby name/age (after onboarding), or units. Log out and the "What you track" toggles live at the bottom of History; everything else has nowhere to go.
 - **Units are hardcoded to oz.** `unit`, `timeStep`, and `smartPrefill` exist as component props (from the design comp's config) but aren't exposed anywhere in the UI.
 - **Baby "age" is a static label** picked at onboarding ("2–8 wks") — it never advances. Should become a birth date with computed age.
 - **Sleep is logged as a duration after the fact.** No start/stop timer, no "currently asleep" state on the home screen.
 - **Timeline shows the last 12 entries; History is a fixed 7-day window.** No day-by-day drill-down, no month view, no data export.
-- **Entry types are fixed** (bottle, nursing, pump, wet, dirty, both, sleep, bath, meds). Meds is hardcoded to "vitamin D" in the subtitle. No custom types or notes on entries.
+- **Entry types are fixed** (bottle, nursing, pump, wet, dirty, both, sleep, bath, meds). Meds is hardcoded to "vitamin D" in the subtitle. No custom types or notes on entries. (Households *can* now switch off pump/diapers/sleep/bath/meds tracking in History, but can't add types.)
 - **Offline indicator is subtle** (a small "· offline" in the header). Queued-but-unsynced entries aren't visually marked.
 - **Toast/undo only covers the last added entry**; edits and deletes have no undo.
 

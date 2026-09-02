@@ -114,6 +114,43 @@ class BabylogApiTest extends TestCase
         $this->assertTrue((bool) $entries[0]['deleted']);
     }
 
+    // ── household settings ────────────────────────────────────────────────────
+
+    public function test_settings_sync_to_the_partner(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $this->assertNull($this->getJson('/api/state', $this->authed($ben))->json('settings'));
+
+        $this->postJson('/api/settings', ['tracking' => ['diapers' => false], 'dismissed' => ['meds']], $this->authed($ben))->assertOk();
+
+        $settings = $this->getJson('/api/state', $this->authed($kat))->json('settings');
+        $this->assertFalse($settings['tracking']['diapers']);
+        $this->assertSame(['meds'], $settings['dismissed']);
+    }
+
+    public function test_settings_drop_unknown_tracker_keys(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/settings', ['tracking' => ['diapers' => false, 'feeds' => false], 'dismissed' => ['nonsense']], $this->authed($ben))->assertOk();
+
+        $settings = $this->getJson('/api/state', $this->authed($ben))->json('settings');
+        $this->assertSame(['diapers' => false], $settings['tracking']);
+        $this->assertSame([], $settings['dismissed']);
+    }
+
+    public function test_settings_are_scoped_to_the_household(): void
+    {
+        config(['babylog.open_registration' => true]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $eve = $this->register('Eve', 'eve@example.com')->json('token');
+
+        $this->postJson('/api/settings', ['tracking' => ['bath' => false]], $this->authed($ben))->assertOk();
+        $this->assertNull($this->getJson('/api/state', $this->authed($eve))->json('settings'));
+    }
+
     // ── shifts ────────────────────────────────────────────────────────────────
 
     public function test_full_shift_cycle_transfers_duty(): void

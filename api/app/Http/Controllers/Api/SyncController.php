@@ -35,6 +35,7 @@ class SyncController extends Controller
             'invitePending' => $household->invite_email,
             'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label] : null,
             'onDutyUserId' => $household->on_duty_user_id,
+            'settings' => $household->settings,
             'shift' => $shift,
             'entries' => $entries,
             'serverTime' => now()->getTimestampMs(),
@@ -83,6 +84,37 @@ class SyncController extends Controller
         HouseholdTouched::send($household->id, 'invite');
 
         return response()->json(['ok' => true, 'code' => $code]);
+    }
+
+    /** Trackers the household can switch off; feeds are core and not listed. */
+    private const TRACKS = ['pump', 'diapers', 'sleep', 'bath', 'meds'];
+
+    /** Household-level preferences (tracking toggles + dismissed nudges). Last write wins. */
+    public function setSettings(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'tracking' => ['sometimes', 'array'],
+            'tracking.*' => ['boolean'],
+            'dismissed' => ['sometimes', 'array', 'max:20'],
+            'dismissed.*' => ['string', 'max:30'],
+        ]);
+
+        $household = $request->user()->household;
+        $settings = $household->settings ?? [];
+        if (array_key_exists('tracking', $data)) {
+            $settings['tracking'] = array_map(
+                fn ($v) => (bool) $v,
+                array_intersect_key($data['tracking'], array_flip(self::TRACKS)),
+            );
+        }
+        if (array_key_exists('dismissed', $data)) {
+            $settings['dismissed'] = array_values(array_intersect($data['dismissed'], self::TRACKS));
+        }
+        $household->update(['settings' => $settings]);
+
+        HouseholdTouched::send($household->id, 'settings');
+
+        return response()->json(['ok' => true, 'settings' => $settings]);
     }
 
     /** Batch upsert from the client outbox. Client ids win; latest write wins. */

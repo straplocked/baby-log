@@ -32,6 +32,7 @@ The single polling/converge endpoint.
   "invitePending": "katrina@example.com",            // or null
   "baby":    { "name": "Wren", "age": "2–8 wks" },  // or null
   "onDutyUserId": 1,
+  "settings": { "tracking": {"diapers": false}, "dismissed": ["meds"] },  // or null
   "shift":   { "id": 3, "state": "requested|active|completed", "requester_id": 1,
                "user_id": 2, "note": "…", "plan": [{"id":"p1","type":"bottle","at":1750000000000}],
                "until": "Until 6 AM", "requested_at": 0, "started_at": 0, "ended_at": 0,
@@ -58,6 +59,12 @@ Batch upsert from the client outbox (≤ 500 per call).
 
 ### `POST /invite`
 `{ email }` → `{ ok, code }`. Stores the lowercased email + hashed code on the household; **the plaintext code is returned only here** — the inviter must share it out-of-band (no email is sent). Household already has 2 users → 422. Re-inviting overwrites the pending invite/code.
+
+### `POST /settings`
+```json
+{ "tracking": { "diapers": false }, "dismissed": ["meds"] }
+```
+Household-level preferences, shared by both parents; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
 
 ## Shifts — all auth + throttle 120/min
 
