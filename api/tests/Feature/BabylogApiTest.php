@@ -114,6 +114,27 @@ class BabylogApiTest extends TestCase
         $this->assertTrue((bool) $entries[0]['deleted']);
     }
 
+    // ── baby ──────────────────────────────────────────────────────────────────
+
+    public function test_baby_birthdate_round_trips_and_survives_omission(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $this->postJson('/api/baby', ['name' => 'Maddux', 'birthdate' => '2026-07-20'], $this->authed($ben))->assertOk();
+        $baby = $this->getJson('/api/state', $this->authed($ben))->json('baby');
+        $this->assertSame('2026-07-20', $baby['birthdate']);
+
+        // a rename without a birthdate key must not erase the stored DOB
+        $this->postJson('/api/baby', ['name' => 'Maddux Jr'], $this->authed($ben))->assertOk();
+        $baby = $this->getJson('/api/state', $this->authed($ben))->json('baby');
+        $this->assertSame('Maddux Jr', $baby['name']);
+        $this->assertSame('2026-07-20', $baby['birthdate']);
+
+        // future and garbage dates are rejected
+        $this->postJson('/api/baby', ['name' => 'Maddux', 'birthdate' => now()->addDay()->format('Y-m-d')], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/baby', ['name' => 'Maddux', 'birthdate' => 'not-a-date'], $this->authed($ben))->assertStatus(422);
+    }
+
     // ── household settings ────────────────────────────────────────────────────
 
     public function test_settings_sync_to_the_partner(): void

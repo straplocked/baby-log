@@ -33,7 +33,7 @@ class SyncController extends Controller
             'user' => ['id' => $user->id, 'name' => $user->name, 'householdId' => $user->household_id],
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
             'invitePending' => $household->invite_email,
-            'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label] : null,
+            'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label, 'birthdate' => $household->baby->birthdate] : null,
             'onDutyUserId' => $household->on_duty_user_id,
             'settings' => $household->settings,
             'shift' => $shift,
@@ -47,13 +47,19 @@ class SyncController extends Controller
         $data = $request->validate([
             'name' => ['required', 'string', 'max:100'],
             'age' => ['nullable', 'string', 'max:40'],
+            'birthdate' => ['nullable', 'date_format:Y-m-d', 'before_or_equal:today', 'after:2015-01-01'],
         ]);
 
         $household = $request->user()->household;
-        $household->baby()->updateOrCreate(
-            ['household_id' => $household->id],
-            ['name' => $data['name'], 'age_label' => $data['age'] ?? null],
-        );
+        // only touch fields the client sent — a client that doesn't know the DOB must not erase it
+        $values = ['name' => $data['name']];
+        if (array_key_exists('age', $data)) {
+            $values['age_label'] = $data['age'];
+        }
+        if (array_key_exists('birthdate', $data)) {
+            $values['birthdate'] = $data['birthdate'];
+        }
+        $household->baby()->updateOrCreate(['household_id' => $household->id], $values);
 
         HouseholdTouched::send($household->id, 'baby');
 

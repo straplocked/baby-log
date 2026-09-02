@@ -8,6 +8,7 @@ Live-with-it notes for the testing period. Add entries as they happen — a one-
 |---|---|---|---|
 | 2026-09-02 | C+K | Cluster feeding skews the feed-rhythm average — Maddux's "every 3h-and-change" window is wrong because back-to-back feeds count as separate rhythm beats. → Fixed: feeds within 45m now group into one session for the average/plan. | 🤔 |
 | 2026-09-02 | C+K | We don't track diapers (no health reason to) but the app assumes everyone tracks everything — "0.3 diapers/day" stats are noise. Want per-household on/off for metrics, ideally with the app suggesting it. → Fixed: "What you track" toggles in History + a low-usage nudge; entries are never deleted. | 🤔 |
+| 2026-09-02 | C+K | Want wake-window tracking, and the baby's actual DOB so the app tracks age in weeks (the onboarding "2–8 wks" label never advances). → Added: DOB at onboarding + History → About; header age computes live; wake-window avg tile + insight compared against age-typical ranges from docs/feeding-patterns.md. | 💡 |
 | | | | |
 
 ## Questions worth answering while we use it

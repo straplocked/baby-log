@@ -30,7 +30,7 @@ The single polling/converge endpoint.
   "user":    { "id": 1, "name": "Ben", "householdId": 1 },
   "partner": { "id": 2, "name": "Katrina" },        // or null
   "invitePending": "katrina@example.com",            // or null
-  "baby":    { "name": "Wren", "age": "2–8 wks" },  // or null
+  "baby":    { "name": "Wren", "age": "2–8 wks", "birthdate": "2026-07-20" },  // or null; birthdate null until set
   "onDutyUserId": 1,
   "settings": { "tracking": {"diapers": false}, "dismissed": ["meds"] },  // or null
   "shift":   { "id": 3, "state": "requested|active|completed", "requester_id": 1,
@@ -55,7 +55,7 @@ Batch upsert from the client outbox (≤ 500 per call).
 - Returns `{ ok, serverTime }`, broadcasts a poke.
 
 ### `POST /baby`
-`{ name (≤100), age (≤40, nullable) }` — upserts the household's baby.
+`{ name (≤100), age (≤40, nullable), birthdate (Y-m-d, nullable, not future, after 2015) }` — upserts the household's baby. `age`/`birthdate` are only written when the key is present, so a client that doesn't know the DOB can't erase it. `age` is the legacy onboarding label, kept as a fallback for babies without a `birthdate`.
 
 ### `POST /invite`
 `{ email }` → `{ ok, code }`. Stores the lowercased email + hashed code on the household; **the plaintext code is returned only here** — the inviter must share it out-of-band (no email is sent). Household already has 2 users → 422. Re-inviting overwrites the pending invite/code.

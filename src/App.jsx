@@ -27,6 +27,17 @@ const TRACKS = [
   { key: 'bath',    label: 'Bath',    types: ['bath'] },
   { key: 'meds',    label: 'Meds',    types: ['meds'] },
 ]
+// age-typical ranges, distilled from docs/feeding-patterns.md — [max age in weeks, range]
+const WAKE_NORMS = [
+  [4, '30–90m'], [13, '60–90m'], [17, '75m–2h'], [22, '1.5–2.5h'], [30, '2–3h'],
+  [43, '2.5–3.5h'], [61, '3–4h'], [104, '4–6h'], [999, '5–6h'],
+]
+const FEED_NORMS = [
+  [4, 'every 1–3h'], [13, 'every 2–4h'], [26, 'every 2.5–4h'],
+  [39, 'every 3–4h plus starting solids'], [52, 'every 4–5h plus meals'],
+  [999, '3 meals plus snacks, milk alongside'],
+]
+const normFor = (norms, weeks) => (norms.find(([max]) => weeks < max) || norms[norms.length - 1])[1]
 // feeds closer together than this are one cluster-feeding session, not a new rhythm beat
 const CLUSTER_GAP = 45 * 60000
 const sessionStarts = ts => { // ts ascending → first feed of each session
@@ -43,7 +54,7 @@ const PARTNER_COLOR = '#7C8C5A'
 const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
-  'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty']
+  'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -77,7 +88,7 @@ export default class App extends React.Component {
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null,
       toast: null, lastAdded: null,
-      babyName: '', nameField: '', inviteField: '', age: '2–8 wks',
+      babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
@@ -178,7 +189,11 @@ export default class App extends React.Component {
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
         next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [] }
       }
-      if (st.baby) { next.babyName = st.baby.name; if (st.baby.age) next.age = st.baby.age }
+      if (st.baby) {
+        next.babyName = st.baby.name
+        if (st.baby.age) next.age = st.baby.age
+        if (st.baby.birthdate !== undefined) next.babyBirthdate = st.baby.birthdate
+      }
       // my active shift plan lives on the server copy
       if (st.shift && st.shift.state === 'active' && st.user && st.shift.user_id === st.user.id) next.plan = st.shift.plan || []
       return next
@@ -220,9 +235,10 @@ export default class App extends React.Component {
   finishOnboard = async () => {
     const name = (this.state.nameField || '').trim() || 'Baby'
     const age = this.state.age
-    this.setState({ screen: 'home', babyName: name })
+    const birthdate = this.state.dobField || undefined
+    this.setState({ screen: 'home', babyName: name, babyBirthdate: birthdate || null })
     try {
-      await api.setBaby({ name, age })
+      await api.setBaby({ name, age, birthdate })
       if (this.state.inviteField.trim()) await this.sendInvite()
     } catch { this.setState({ offline: true }) }
   }
@@ -297,6 +313,23 @@ export default class App extends React.Component {
     if (e.type === 'meds') p.push('vitamin D')
     if (day) p.push(day)
     return p.filter(Boolean).join(' · ') || 'logged'
+  }
+  // real DOB wins over the onboarding age bucket; weeks first, then months, then years
+  ageInfo() {
+    const bd = this.state.babyBirthdate
+    if (!bd) return { label: this.state.age, weeks: null }
+    const days = Math.max(0, Math.floor((Date.now() - new Date(bd + 'T00:00:00').getTime()) / DAY))
+    const weeks = Math.floor(days / 7), mo = Math.floor(days / 30.4375)
+    const label = days < 183 ? weeks + (weeks === 1 ? ' wk' : ' wks')
+      : mo < 24 ? mo + ' mo'
+      : Math.floor(mo / 12) + 'y' + (mo % 12 ? ' ' + (mo % 12) + 'm' : '')
+    return { label, weeks }
+  }
+  setBirthdate = e => {
+    const bd = e.target.value
+    if (!bd) return
+    this.setState({ babyBirthdate: bd })
+    api.setBaby({ name: this.state.babyName || 'Baby', birthdate: bd }).catch(() => this.setState({ offline: true }))
   }
   trackOn(key) { return this.state.settings.tracking[key] !== false }
   typeOn(typeKey) {
@@ -576,6 +609,15 @@ export default class App extends React.Component {
     const feedsWk = week.filter(e => FEEDS.includes(e.type))
     const ozWk = week.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const naps = week.filter(e => e.type === 'sleep')
+    // wake window: one sleep's end (t) to the next sleep's start (t − duration)
+    const sleepsAsc = [...naps].sort((a, b) => a.t - b.t)
+    const wakes = []
+    for (let i = 1; i < sleepsAsc.length; i++) {
+      const w = (sleepsAsc[i].t - (Number(sleepsAsc[i].detail) || 0) * 60000) - sleepsAsc[i - 1].t
+      if (w > 0 && w < 8 * 3600000) wakes.push(w) // longer gaps are overnight or unlogged sleep
+    }
+    const avgWake = wakes.length ? Math.round(wakes.reduce((a, b) => a + b, 0) / wakes.length / 60000) : 0
+    const ageI = this.ageInfo()
     const sorted = feedsWk.map(e => e.t).sort((a, b) => a - b)
     const starts = sessionStarts(sorted)
     const clustered = sorted.length - starts.length // feeds folded into a cluster session
@@ -587,7 +629,10 @@ export default class App extends React.Component {
       { label: 'Feeds / day', value: (feedsWk.length / 7).toFixed(1), unit: 'avg' },
       { label: this.unit() + ' / day', value: Math.round(ozWk / 7), unit: 'bottles only' },
       ...(this.trackOn('diapers') ? [{ label: 'Diapers / day', value: (week.filter(e => DIAPERS.includes(e.type)).length / 7).toFixed(1), unit: 'avg' }] : []),
-      ...(this.trackOn('sleep') ? [{ label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' }] : []),
+      ...(this.trackOn('sleep') ? [
+        { label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' },
+        { label: 'Wake window', value: avgWake ? this.dur(avgWake) : '—', unit: 'avg' },
+      ] : []),
     ]
 
     // nudge to switch off a daily-expected tracker that clearly isn't being used
@@ -686,13 +731,11 @@ export default class App extends React.Component {
       nameField: s.nameField, setName: e => this.setState({ nameField: e.target.value }),
       inviteField: s.inviteField, setInvite: e => this.setState({ inviteField: e.target.value }),
       sendInvite: this.sendInvite,
-      ageOptions: ['Under 2 wks', '2–8 wks', '2–6 mo', '6 mo +'].map(a => {
-        const on = s.age === a
-        return { label: a, onTap: () => this.setState({ age: a }), ...(on ? { bg: 'rgba(124,140,90,0.16)', border: OLIVE, fg: '#4A5533' } : { bg: '#FFFDF8', border: 'rgba(38,35,29,0.12)', fg: '#6E6659' }) }
-      }),
+      dobField: s.dobField, setDob: e => this.setState({ dobField: e.target.value }),
+      today: new Date().toISOString().slice(0, 10),
       finishOnboard: this.finishOnboard,
 
-      babyName: s.babyName || 'Baby', ageLabel: s.age,
+      babyName: s.babyName || 'Baby', ageLabel: this.ageInfo().label,
       dateLabel: new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
       sinceCards: cards, todaySummary, timeline,
       offline: s.offline,
@@ -752,8 +795,14 @@ export default class App extends React.Component {
       patternBody: avgGap
         ? 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '.'
           + (clustered ? ' Cluster feeds (' + clustered + ' within 45m of the one before) count as one feed here, so they don’t drag the average down.' : '')
-          + ' Handy for knowing whether the next wake-up is hunger or something else.'
+          + (ageI.weeks != null ? ' Typical at ' + ageI.label + ': ' + normFor(FEED_NORMS, ageI.weeks) + '.' : '')
         : 'Keep logging — once there’s a rhythm, it shows up here.',
+      wakeInsight: this.trackOn('sleep') && avgWake ? {
+        title: 'Awake about ' + this.dur(avgWake) + ' between naps',
+        body: ageI.weeks != null
+          ? 'Typical at ' + ageI.label + ' is ' + normFor(WAKE_NORMS, ageI.weeks) + '. Watching this stretch out over the weeks is the rhythm maturing — not something to fight.'
+          : 'Add ' + (s.babyName || 'the baby') + '’s birthday below and this compares against what’s typical for their age.',
+      } : null,
       trackRec: trackRec ? {
         title: 'Not tracking ' + trackRec.label.toLowerCase() + '?',
         body: (trackRec.n ? 'Only ' + trackRec.n + ' logged' : 'Nothing logged') + ' in the last 7 days. Turning it off hides its cards and charts — nothing is deleted, and it comes back if you switch it on again.',
@@ -761,6 +810,8 @@ export default class App extends React.Component {
         turnOff: () => this.setTracking(trackRec.key, false),
         keep: () => this.dismissRec(trackRec.key),
       } : null,
+      birthdate: s.babyBirthdate || '', setBirthdate: this.setBirthdate,
+      ageLine: s.babyBirthdate ? ageI.label + ' old' : 'Set it and the log thinks in their weeks — insights compare against their age.',
       trackRows: TRACKS.map(tr => {
         const on = this.trackOn(tr.key), tt = T(tr.types[0])
         return { label: tr.label, icon: tt.icon, color: tt.color,
@@ -871,12 +922,9 @@ export default class App extends React.Component {
               </div>
 
               <div style={S('display:flex;flex-direction:column;gap:7px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Born</div>
-                <div style={S('display:flex;gap:8px')}>
-                  {v.ageOptions.map(a => (
-                    <button key={a.label} type="button" onClick={a.onTap} style={S(`flex:1;background:${a.bg};border:1px solid ${a.border};border-radius:14px;padding:13px 6px;font-family:inherit;font-size:13.5px;font-weight:500;color:${a.fg};cursor:pointer`)}>{a.label}</button>
-                  ))}
-                </div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Born on</div>
+                <input type="date" value={v.dobField} onChange={v.setDob} max={v.today} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:16px;padding:15px 16px;font-size:17px;color:#26231D;outline:none;font-family:inherit')} />
+                <div style={S('font-size:12.5px;color:#8C8474;padding-left:2px')}>So the log can think in their weeks — feeds, naps, and wake windows all change with age.</div>
               </div>
 
               <div style={S('display:flex;flex-direction:column;gap:7px')}>
@@ -1101,6 +1149,26 @@ export default class App extends React.Component {
                   <div style={S('font-size:14.5px;font-weight:600;color:#4A5533')}>{v.patternTitle}</div>
                   <div style={S('font-size:13px;line-height:1.5;color:#5F6E42;text-wrap:pretty')}>{v.patternBody}</div>
                 </div>
+              </div>
+
+              {v.wakeInsight && (
+                <div style={S('background:rgba(124,140,90,0.10);border:1px solid rgba(124,140,90,0.22);border-radius:22px;padding:16px;margin-top:12px;display:flex;gap:12px;align-items:flex-start')}>
+                  <Sym style={{ fontSize: 20, color: '#5F6E42', flexShrink: 0 }}>wb_twilight</Sym>
+                  <div style={S('display:flex;flex-direction:column;gap:3px')}>
+                    <div style={S('font-size:14.5px;font-weight:600;color:#4A5533')}>{v.wakeInsight.title}</div>
+                    <div style={S('font-size:13px;line-height:1.5;color:#5F6E42;text-wrap:pretty')}>{v.wakeInsight.body}</div>
+                  </div>
+                </div>
+              )}
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.babyName}</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
+                  <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
               </div>
 
               {v.trackRec && (
