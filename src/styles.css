@@ -1,0 +1,36 @@
+* { -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; }
+body { background: #EDE7DC; }
+a { color: #6B7A4C; text-decoration: none; }
+a:hover { color: #55632F; }
+*::-webkit-scrollbar { width: 0; height: 0; }
+input { font-family: inherit; }
+
+#root { min-height: 100dvh; display: flex; justify-content: center; }
+
+.app {
+  position: relative;
+  width: 100%;
+  max-width: 430px;
+  height: 100dvh;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: #FAF6EF;
+  font-family: 'Nunito Sans', system-ui, sans-serif;
+  color: #26231D;
+  display: flex;
+  flex-direction: column;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+@media (min-width: 431px) {
+  .app { box-shadow: 0 0 0 1px rgba(38, 35, 29, 0.08), 0 24px 60px rgba(38, 35, 29, 0.14); }
+}
+
+/* hover states carried over from the comp's style-hover attributes */
+.hov-olive:hover { background: #6B7A4C !important; }
+.hov-cream:hover { background: #F1EBE0 !important; }
+.hov-dark:hover { background: #100E0B !important; }
+.hov-bd:hover { border-color: rgba(38, 35, 29, 0.24) !important; }
+.hov-dim:hover { opacity: 0.7; }
+.hov-row:hover { background: rgba(124, 140, 90, 0.05) !important; }

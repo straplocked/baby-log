@@ -1,0 +1,7 @@
+services:
+  app:
+    build: .
+    container_name: baby-log-app
+    ports:
+      - "3500:80"
+    restart: unless-stopped
