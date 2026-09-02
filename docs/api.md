@@ -68,7 +68,7 @@ Batch upsert from the client outbox (≤ 500 per call).
 ```json
 { "tracking": { "diapers": false }, "dismissed": ["meds"] }
 ```
-Household-level preferences, shared by both parents; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
+Household-level preferences, shared by both parents; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. `widgets` is the ordered list of "since last …" cards shown on the Now screen (from `feeds pump diapers sleep bath meds`; unknowns/duplicates dropped, client order kept; omitted/empty ⇒ the client's default set). Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
 
 ## Push notifications — all auth + throttle 120/min
 

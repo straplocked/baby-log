@@ -28,6 +28,18 @@ const TRACKS = [
   { key: 'bath',    label: 'Bath',    types: ['bath'] },
   { key: 'meds',    label: 'Meds',    types: ['meds'] },
 ]
+// "since last …" cards for the Now screen. `track` gates a card on its tracker
+// being on; feeds has none (always available). Order here is the display order.
+const WIDGETS = [
+  { key: 'feeds',   keys: FEEDS,     label: 'Fed',    icon: 'local_drink',           color: 'oklch(0.60 0.075 250)' },
+  { key: 'pump',    keys: ['pump'],  label: 'Pumped', icon: 'opacity',               color: 'oklch(0.60 0.075 300)', track: 'pump' },
+  { key: 'diapers', keys: DIAPERS,   label: 'Diaper', icon: 'baby_changing_station', color: 'oklch(0.60 0.075 210)', track: 'diapers' },
+  { key: 'sleep',   keys: ['sleep'], label: 'Slept',  icon: 'bedtime',               color: 'oklch(0.60 0.075 25)',  track: 'sleep' },
+  { key: 'bath',    keys: ['bath'],  label: 'Bath',   icon: 'bathtub',               color: 'oklch(0.60 0.075 195)', track: 'bath' },
+  { key: 'meds',    keys: ['meds'],  label: 'Meds',   icon: 'medication',            color: 'oklch(0.60 0.075 150)', track: 'meds' },
+]
+// the Now grid before anyone customized it — matches the original fixed four
+const DEFAULT_WIDGETS = ['feeds', 'diapers', 'sleep', 'bath']
 // age-typical ranges, distilled from docs/feeding-patterns.md — [max age in weeks, range]
 const WAKE_NORMS = [
   [4, '30–90m'], [13, '60–90m'], [17, '75m–2h'], [22, '1.5–2.5h'], [30, '2–3h'],
@@ -212,7 +224,7 @@ export default class App extends React.Component {
       }
       // server settings win unless a local toggle is still waiting to push
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
-        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [] }
+        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null }
       }
       if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
       if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
@@ -425,6 +437,19 @@ export default class App extends React.Component {
     settings: { ...s.settings, tracking: { ...s.settings.tracking, [key]: on } },
     settingsDirty: true,
   }), () => this.flushSoon())
+  // widgets shown on Now: the household's chosen set (or the default), then
+  // filtered so a card can't outlive the tracker it depends on
+  widgetKeys() {
+    const w = this.state.settings.widgets
+    const chosen = Array.isArray(w) && w.length ? w : DEFAULT_WIDGETS
+    return chosen.filter(k => { const wid = WIDGETS.find(x => x.key === k); return wid && (!wid.track || this.trackOn(wid.track)) })
+  }
+  setWidget = (key, on) => this.setState(s => {
+    const cur = Array.isArray(s.settings.widgets) && s.settings.widgets.length ? s.settings.widgets : this.widgetKeys()
+    const set = new Set(on ? [...cur, key] : cur.filter(k => k !== key))
+    const widgets = WIDGETS.map(w => w.key).filter(k => set.has(k)) // normalize to catalog order
+    return { settings: { ...s.settings, widgets }, settingsDirty: true }
+  }, () => this.flushSoon())
   dismissRec = key => this.setState(s => ({
     settings: { ...s.settings, dismissed: [...new Set([...s.settings.dismissed, key])] },
     settingsDirty: true,
@@ -681,12 +706,8 @@ export default class App extends React.Component {
     const initial = n => (n || '?').trim()[0]?.toUpperCase() || '?'
     const iAmOnDuty = !me || !s.onDutyUserId || s.onDutyUserId === me.id
 
-    const cards = [
-      { keys: FEEDS, label: 'Fed', icon: 'local_drink', color: 'oklch(0.60 0.075 250)' },
-      { keys: DIAPERS, label: 'Diaper', icon: 'baby_changing_station', color: 'oklch(0.60 0.075 210)', track: 'diapers' },
-      { keys: ['sleep'], label: 'Slept', icon: 'bedtime', color: 'oklch(0.60 0.075 25)', track: 'sleep' },
-      { keys: ['bath'], label: 'Bath', icon: 'bathtub', color: 'oklch(0.60 0.075 195)', track: 'bath' },
-    ].filter(c => !c.track || this.trackOn(c.track)).map(c => {
+    const cards = this.widgetKeys().map(k => {
+      const c = WIDGETS.find(w => w.key === k)
       const e = this.lastOf(c.keys)
       const day = e ? this.dayOf(e.t) : ''
       return { label: c.label, icon: c.icon, color: c.color, elapsed: e ? this.elapsed(e.t) : '—',
@@ -1039,6 +1060,15 @@ export default class App extends React.Component {
           toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? '#7C8C5A' : '#CFC7B4',
           onToggle: () => this.setTracking(tr.key, !on) }
       }),
+      widgetRows: (() => {
+        const shown = this.widgetKeys()
+        return WIDGETS.filter(w => !w.track || this.trackOn(w.track)).map(w => {
+          const on = shown.includes(w.key)
+          return { label: w.label, icon: w.icon, color: w.color,
+            toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? '#7C8C5A' : '#CFC7B4',
+            onToggle: () => this.setWidget(w.key, !on) }
+        })
+      })(),
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode,
     }
@@ -1478,6 +1508,20 @@ export default class App extends React.Component {
                   <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
                 </div>
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Now screen cards</div>
+                {v.widgetRows.map((r, i) => (
+                  <div key={i} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                    <Sym style={{ fontSize: 18, color: r.color }}>{r.icon}</Sym>
+                    <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{r.label}</div>
+                    <button type="button" onClick={r.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                      <Sym style={{ fontSize: 22, color: r.toggleColor }}>{r.toggleIcon}</Sym>
+                    </button>
+                  </div>
+                ))}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>These are the “time since last …” cards at the top of Now. Only things you track can appear here.</div>
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>

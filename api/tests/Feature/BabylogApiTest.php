@@ -162,6 +162,17 @@ class BabylogApiTest extends TestCase
         $this->assertSame([], $settings['dismissed']);
     }
 
+    public function test_now_screen_widgets_round_trip_ordered_and_filtered(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        // client order is preserved; unknowns and duplicates are dropped
+        $this->postJson('/api/settings', ['widgets' => ['pump', 'feeds', 'nope', 'pump']], $this->authed($ben))->assertOk();
+
+        $settings = $this->getJson('/api/state', $this->authed($ben))->json('settings');
+        $this->assertSame(['pump', 'feeds'], $settings['widgets']);
+    }
+
     public function test_settings_are_scoped_to_the_household(): void
     {
         config(['babylog.open_registration' => true]);

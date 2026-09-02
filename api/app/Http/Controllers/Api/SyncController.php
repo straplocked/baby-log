@@ -99,7 +99,10 @@ class SyncController extends Controller
     /** Trackers the household can switch off; feeds are core and not listed. */
     private const TRACKS = ['pump', 'diapers', 'sleep', 'bath', 'meds'];
 
-    /** Household-level preferences (tracking toggles + dismissed nudges). Last write wins. */
+    /** "Since last …" cards the household can choose to show on the Now screen. */
+    private const WIDGETS = ['feeds', 'pump', 'diapers', 'sleep', 'bath', 'meds'];
+
+    /** Household-level preferences (tracking toggles, dismissed nudges, Now-screen widgets). Last write wins. */
     public function setSettings(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -107,6 +110,8 @@ class SyncController extends Controller
             'tracking.*' => ['boolean'],
             'dismissed' => ['sometimes', 'array', 'max:20'],
             'dismissed.*' => ['string', 'max:30'],
+            'widgets' => ['sometimes', 'array', 'max:8'],
+            'widgets.*' => ['string', 'max:20'],
         ]);
 
         $household = $request->user()->household;
@@ -119,6 +124,10 @@ class SyncController extends Controller
         }
         if (array_key_exists('dismissed', $data)) {
             $settings['dismissed'] = array_values(array_intersect($data['dismissed'], self::TRACKS));
+        }
+        if (array_key_exists('widgets', $data)) {
+            // keep the client's order, drop unknowns and duplicates
+            $settings['widgets'] = array_values(array_unique(array_intersect($data['widgets'], self::WIDGETS)));
         }
         $household->update(['settings' => $settings]);
 
