@@ -1,54 +1,50 @@
-# Baby Log
+# Baby Log 🐤
 
-Three taps from pocket to logged. An installable, local-first PWA for two parents sharing one baby log — implemented from the Claude Design comp in [design/Baby Log.dc.html](design/Baby%20Log.dc.html).
+Three taps from pocket to logged. An installable, local-first PWA for two parents sharing one baby's log — with real-time sync, shift handoffs, and an invite-only household model. Implemented from the Claude Design comp in [design/Baby Log.dc.html](design/Baby%20Log.dc.html).
 
-## Screens
+## What it does
 
-- **Splash / Auth / Onboarding** — account entry and two-question setup (name + age), partner invite.
-- **Now** — since-cards (fed / diaper / slept / bath), today summary, tappable timeline (tap an entry to edit or delete it).
-- **History** — 7-day stats, feeds & diapers bar charts, feed-rhythm insight. "Reset demo data" lives at the bottom.
-- **Quick-log sheet** — opens pre-stamped with the current time and the predicted next entry (smart prefill: alternates nursing sides, remembers last bottle amount). Fast path is open → + → Save; time nudges cost one tap.
-- **Shifts** — accept a handoff (plan drafted from the baby's rhythm), tick the plan off as you log, hand back with a note and an auto-generated shift summary.
+- **Log in three taps** — the sheet opens pre-stamped with the current time and the *predicted* next entry (alternating nursing sides, last bottle amount, feed-vs-diaper rhythm). Overriding the guess costs one tap; backfilling costs one nudge (−5/−15/−1h).
+- **Both of you, one log** — a partner joins by invite (email + single-use code) and sees the same log live over websockets. Entries write locally first and sync when there's signal, so 3am logging never waits on a network.
+- **Shifts, not just a log** — "I need to sleep, take him" is a first-class flow: request a handoff with a note, the partner accepts with an auto-drafted plan from the baby's rhythm, logged feeds tick the plan off, and handing back generates a shift summary instead of a "when did you…" conversation.
+- **Now & History** — since-cards (fed/diaper/slept/bath), today's totals, an editable timeline, 7-day stats and charts, and a feeds-rhythm insight.
 
 ## Stack
 
-- **Frontend**: Vite + React 18, no other runtime deps. Design styles carried over 1:1 via a tiny CSS-string→style-object parser ([src/s.js](src/s.js)).
-- **API**: Laravel (in [api/](api/)) with SQLite + Sanctum bearer tokens. Households link two parents; an invite by email drops the partner into the same log when they sign up. Endpoints: auth, baby setup, invite, batch entry sync, shift request/accept/plan/handback. `GET /api/state?since=` is the single polling endpoint.
-- **Realtime**: Laravel Reverb (WebSockets, Pusher protocol) pushes a lightweight `HouseholdTouched` poke on every write — entries, shifts, invites — over a Sanctum-authorized private `household.{id}` channel. Clients react by pulling `/api/state`, so the sync path is identical for sockets, polls, and reconnects. Writes carry `X-Socket-ID` so you're never poked by your own changes.
-- **Local-first sync**: entries write to `localStorage` instantly with an outbox queue, then push in the background. The socket carries updates; a slow poll (60s), plus resync on focus/online/reconnect, is the fallback — 3am logging never waits on a network. Deletes are tombstones so they sync too. A service worker caches the app shell and fonts for offline loads.
-- **Shifts are real between two accounts**: request a handoff with a note ("Ask X to take over"), the partner sees the incoming card and accepts, hand back generates a shift report that auto-surfaces on the other phone.
-- **Docker**: three services — the PWA (Node build → nginx, which proxies `/api` to the API and `/app` websockets to Reverb), the Laravel API (`php artisan serve` + SQLite volume), and Reverb (`php artisan reverb:start`).
+React 18 + Vite PWA · Laravel 13 API (SQLite, Sanctum) · Laravel Reverb websockets · nginx · Docker Compose. Invite-only registration, throttled auth, tombstone-synced deletes, poke-to-pull realtime. Details: [docs/architecture.md](docs/architecture.md).
 
-- **Invite-only by default**: sign-up is open for the first account on an instance and for emails with a pending household invite — nobody else (set `BABYLOG_OPEN_REGISTRATION=true` to change). Auth endpoints are throttled; API and Reverb are never published in the Unraid deploy, only the app port.
+## Documentation
 
-## Run
+| Doc | What's in it |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System design, sync model, realtime, shift semantics, key decisions |
+| [docs/api.md](docs/api.md) | Every endpoint with payloads, rules, and error behavior |
+| [docs/operations.md](docs/operations.md) | Unraid runbook: update, reset, backups, NPM, local dev, troubleshooting |
+| [docs/known-limitations.md](docs/known-limitations.md) | Honest gaps + candidate roadmap |
+| [TESTING.md](TESTING.md) | Trial-period journal — the feedback that drives iteration |
+| [CLAUDE.md](CLAUDE.md) | Conventions for AI-assisted development sessions |
 
+## Run it
+
+**Local (full stack):**
 ```bash
-docker compose up -d --build   # app on http://localhost:3500 (API :3501, Reverb :3502 for dev)
+cp .env.example .env    # fill in APP_KEY + REVERB_APP_SECRET (commands in the file)
+docker compose up -d --build    # http://localhost:3500
 ```
 
-## Unraid
-
-One command installs (and later updates — data survives in `appdata/baby-log/data`):
-
+**Unraid (install & update are the same command):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/babylog.sh | sh
 ```
+Requires the *Docker Compose Manager* plugin. Data survives updates in `appdata/baby-log/data`; secrets are generated on first run. Put a reverse proxy with websocket support in front for remote access. Full runbook: [docs/operations.md](docs/operations.md).
 
-Requires the *Docker Compose Manager* plugin from Community Apps. Fresh `APP_KEY`/Reverb secrets are generated into `appdata/baby-log/.env` on first run. Point your reverse proxy (e.g. NPM) at port 3500 with websocket support enabled.
-
-Frontend dev mode (proxies `/api` to the dockerized API on :3501):
-
+**Tests:**
 ```bash
-npm install
-npm run dev                    # http://localhost:3500
+docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:2 php artisan test
 ```
 
-Port 3500 was chosen to avoid this machine's occupied 3xxx block (3000/3100/3200/3300/3400-3499).
+CI runs the suite on every push and publishes `ghcr.io/straplocked/baby-log-app` + `baby-log-api` images when green.
 
-## Notes
+## Status
 
-- To try both sides locally, open `http://localhost:3500` and `http://127.0.0.1:3500` — different origins, so each tab holds its own account.
-- The API container runs `php artisan migrate --force` on boot; the SQLite file lives in the `babylog-db` volume (`docker compose down -v` wipes it).
-- Host PHP on this machine lacks several extensions, so all composer/artisan work runs through containers (`docker run --rm -v "$PWD/api:/app" -w /app composer:2 php artisan …`).
-- Original design files (including the `.dc.html` comp and iOS frame) are kept under [design/](design/) for reference.
+Deployed and in daily-use trial. Iteration backlog builds in [TESTING.md](TESTING.md); Unraid Community Apps release planned afterwards (tagged versions, pinned installer, CA template).
