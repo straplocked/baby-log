@@ -6,7 +6,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 - **Invites don't send email.** `POST /invite` stores the invite and returns the code — the inviter must text/tell the partner the code themselves. The UI says "Invited …" which can read as "an email was sent". Fix candidates: actually send mail (needs SMTP config), or reword the UI to "share this code".
 - **"Forgot password?" is a dead link.** No reset flow exists. With no mailer, a reset would need an out-of-band mechanism (e.g. a reset script on the server, or SMTP first).
-- **No account/settings screen.** Can't change name, email, password, baby name/age (after onboarding), or units. Log out and the "What you track" toggles live at the bottom of History; everything else has nowhere to go.
+- **Partial account/settings screen.** There's now a Settings screen (gear in the History header) holding About/birth date, What-you-track, Notifications, and Log out. Still can't change name, email, password, baby name (after onboarding), or units from it.
 - **Units are hardcoded to oz.** `unit`, `timeStep`, and `smartPrefill` exist as component props (from the design comp's config) but aren't exposed anywhere in the UI.
 - ~~**Baby "age" is a static label**~~ Fixed 2026-09-02: onboarding asks for a birth date (editable later in History → About), and the header age computes live (weeks → months → years). The old label remains only as a fallback for babies without a DOB.
 - **Sleep is logged as a duration after the fact.** No start/stop timer, no "currently asleep" state on the home screen.

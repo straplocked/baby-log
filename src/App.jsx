@@ -46,6 +46,21 @@ const sessionStarts = ts => { // ts ascending → first feed of each session
   for (let i = 0; i < ts.length; i++) if (i === 0 || ts[i] - ts[i - 1] > CLUSTER_GAP) out.push(ts[i])
   return out
 }
+// duration quick-select: a few presets, and dragging a chip up/down scrubs a
+// custom value along this ladder — fine steps for short naps, coarser as hours stack
+const DUR_PRESETS = { dur: [30, 45, 90], mins: [10, 20, 30] }
+const DUR_LADDER = (() => {
+  const a = []
+  for (let v = 5; v < 60; v += 5) a.push(v)
+  for (let v = 60; v < 180; v += 15) a.push(v)
+  for (let v = 180; v <= 720; v += 30) a.push(v)
+  return a
+})()
+const ladderIdx = v => {
+  let best = 0
+  for (let i = 1; i < DUR_LADDER.length; i++) if (Math.abs(DUR_LADDER[i] - v) < Math.abs(DUR_LADDER[best] - v)) best = i
+  return best
+}
 const OLIVE = '#7C8C5A'
 const DAY = 86400000
 const ME_COLOR = '#7A93B5'
@@ -88,7 +103,7 @@ export default class App extends React.Component {
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
-      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null,
+      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, durDrag: null,
       sheetDragY: 0, sheetDragging: false, sheetTall: false,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -547,6 +562,30 @@ export default class App extends React.Component {
     this.setState(reset)
   }
   pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k), detail2: s.sel === k ? s.detail2 : this.defaultDetail2(k) }))
+  // ── duration scrub: tap picks the preset, drag up/down dials a custom value ─
+  durDragStart = (field, base) => e => {
+    this._durDrag = { field, base, y0: e.clientY, moved: false, idx0: ladderIdx(base) }
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* drag still tracks */ }
+  }
+  durDragMove = e => {
+    const d = this._durDrag
+    if (!d) return
+    const dy = d.y0 - e.clientY // up = longer, like pulling a value out of the chip
+    if (!d.moved && Math.abs(dy) < 7) return
+    d.moved = true
+    const i = Math.max(0, Math.min(DUR_LADDER.length - 1, d.idx0 + Math.round(dy / 14)))
+    const val = DUR_LADDER[i]
+    if (this.state.durDrag?.val !== val) this.setState({ durDrag: { field: d.field, base: d.base, val } })
+  }
+  durDragEnd = () => {
+    const d = this._durDrag
+    this._durDrag = null
+    if (!d) return
+    const val = d.moved ? this.state.durDrag?.val : null
+    if (val != null) this.setState({ [d.field]: val, durDrag: null })
+    else if (d.field === 'detail2') this.setState(s => ({ detail2: s.detail2 === d.base ? null : d.base, durDrag: null })) // tap toggles, as before
+    else this.setState({ detail: d.base, durDrag: null })
+  }
   nudge = n => () => this.setState({ offset: n, pickedT: null })
   pickTime = e => {
     const [h, m] = e.target.value.split(':').map(Number)
@@ -707,14 +746,29 @@ export default class App extends React.Component {
       .map(d => ({ label: d.label, onTap: this.nudge(d.n), ...this.chip(s.pickedT == null && s.offset === d.n, OLIVE) }))
 
     const kind = st.detail
+    // duration chips: few presets, the current custom value sorted in as its own
+    // chip, and the chip under a drag showing the live scrubbed value
+    const durChips = (field, key) => {
+      const cur = s[field] != null && !Number.isNaN(Number(s[field])) ? Number(s[field]) : null
+      const vals = [...DUR_PRESETS[key]]
+      if (cur != null && !vals.includes(cur)) vals.push(cur)
+      vals.sort((a, b) => a - b)
+      const drag = s.durDrag && s.durDrag.field === field ? s.durDrag : null
+      return vals.map(dv => {
+        const dragging = !!drag && drag.base === dv
+        const on = dragging || (!drag && cur === dv)
+        return { label: this.dur(dragging ? drag.val : dv), scrub: true, on,
+          onDown: this.durDragStart(field, dv), ...this.chip(on, st.color) }
+      })
+    }
     const opts = kind === 'amount' ? [2, 2.5, 3, 3.5, 4, 4.5, 5].map(v => ({ v, label: v + ' ' + this.unit() }))
-      : kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v }))
-      : kind === 'dur' ? [15, 30, 45, 90, 150].map(v => ({ v, label: this.dur(v) })) : []
-    const detailOptions = opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
+      : kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v })) : []
+    const detailOptions = kind === 'dur' ? durChips('detail', 'dur')
+      : opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
     const kind2 = st.key === 'bottle' ? 'milk' : st.key === 'nurse' || st.key === 'pump' ? 'mins' : null
-    const opts2 = kind2 === 'milk' ? [{ v: 'breastmilk', label: 'Breast milk' }, { v: 'formula', label: 'Formula' }]
-      : kind2 === 'mins' ? [10, 15, 20, 30, 45].map(v => ({ v, label: this.dur(v) })) : []
-    const detail2Options = opts2.map(o => ({ label: o.label, onTap: () => this.setState(x => ({ detail2: x.detail2 === o.v ? null : o.v })), ...this.chip(s.detail2 === o.v, st.color) }))
+    const opts2 = kind2 === 'milk' ? [{ v: 'breastmilk', label: 'Breast milk' }, { v: 'formula', label: 'Formula' }] : []
+    const detail2Options = kind2 === 'mins' ? durChips('detail2', 'mins')
+      : opts2.map(o => ({ label: o.label, onTap: () => this.setState(x => ({ detail2: x.detail2 === o.v ? null : o.v })), ...this.chip(s.detail2 === o.v, st.color) }))
     const detailStr = (kind === 'amount' ? (s.detail != null ? ' ' + s.detail + ' ' + this.unit() : '') : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : '')
       + (s.detail2 != null ? (kind2 === 'milk' ? ' · ' + (s.detail2 === 'formula' ? 'formula' : 'breast milk') : ' · ' + this.dur(s.detail2)) : '')
 
@@ -827,7 +881,10 @@ export default class App extends React.Component {
 
     return {
       onboarding: s.screen === 'onboard', isHome: s.screen === 'home', isHistory: s.screen === 'history',
-      showTabs: s.screen === 'home' || s.screen === 'history',
+      isSettings: s.screen === 'settings',
+      goSettings: () => this.setState({ screen: 'settings' }),
+      settingsBack: () => this.setState({ screen: 'history' }),
+      showTabs: ['home', 'history', 'settings'].includes(s.screen),
       isSplash: s.screen === 'splash', isAuth: s.screen === 'auth', isLogin: s.authMode === 'login', isSignup: s.authMode === 'signup',
       goSplash: () => this.setState({ screen: 'splash', authError: null }),
       goLogin: () => this.setState({ screen: 'auth', authMode: 'login', authError: null }),
@@ -875,6 +932,7 @@ export default class App extends React.Component {
       nudges, types,
       hasDetail: !!kind, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
       hasDetail2: !!kind2, detail2Label: kind2 === 'milk' ? 'Milk' : 'Duration', detail2Options,
+      durDragMove: this.durDragMove, durDragEnd: this.durDragEnd,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '',
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
@@ -1263,6 +1321,10 @@ export default class App extends React.Component {
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Last 7 days</div>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.historySubtitle}</div>
                   </div>
+                  <div style={S('flex:1')} />
+                  <button type="button" onClick={v.goSettings} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
+                    <Sym style={{ fontSize: 20, color: '#6E6659' }}>settings</Sym>
+                  </button>
                 </>
               )}
             </div>
@@ -1360,16 +1422,6 @@ export default class App extends React.Component {
                 </div>
               )}
 
-              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.babyName}</div>
-                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
-                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
-                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
-                  <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
-                </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
-              </div>
-
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 0 4px;margin-top:12px;overflow:hidden')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 16px 6px")}>All days</div>
                 {v.historyDays.map((d, i) => (
@@ -1398,6 +1450,35 @@ export default class App extends React.Component {
                   </div>
                 </div>
               )}
+
+              </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {v.isSettings && (
+          <div style={S('flex:1;display:flex;flex-direction:column;min-height:0;position:relative;z-index:1')}>
+            <div style={S('padding:10px 20px 12px;display:flex;align-items:center;gap:10px')}>
+              <button type="button" onClick={v.settingsBack} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
+                <Sym style={{ fontSize: 20, color: '#6E6659' }}>arrow_back</Sym>
+              </button>
+              <div style={S('display:flex;flex-direction:column;gap:1px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Settings</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.babyName}’s log</div>
+              </div>
+            </div>
+
+            <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.babyName}</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
+                  <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
+              </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>What you track</div>
@@ -1472,8 +1553,6 @@ export default class App extends React.Component {
               <div style={S('text-align:center;padding:16px 0 0')}>
                 <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>
               </div>
-              </>
-              )}
             </div>
           </div>
         )}
@@ -1565,7 +1644,13 @@ export default class App extends React.Component {
                 {v.hasDetail && (
                   <div style={S('display:flex;align-items:center;gap:8px;padding:14px 2px 0;overflow:auto')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detailLabel}</div>
-                    {v.detailOptions.map((d, i) => (
+                    {v.detailOptions.map((d, i) => d.scrub ? (
+                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.durDragMove} onPointerUp={v.durDragEnd} onPointerCancel={v.durDragEnd}
+                        style={S(`flex-shrink:0;display:flex;align-items:center;gap:3px;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:ns-resize;touch-action:pan-x;user-select:none`)}>
+                        {d.label}
+                        {d.on && <Sym style={{ fontSize: 12, color: d.fg, opacity: 0.7 }}>unfold_more</Sym>}
+                      </button>
+                    ) : (
                       <button key={i} type="button" onClick={d.onTap} style={S(`flex-shrink:0;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:pointer`)}>{d.label}</button>
                     ))}
                   </div>
@@ -1574,7 +1659,13 @@ export default class App extends React.Component {
                 {v.hasDetail2 && (
                   <div style={S('display:flex;align-items:center;gap:8px;padding:10px 2px 0;overflow:auto')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detail2Label}</div>
-                    {v.detail2Options.map((d, i) => (
+                    {v.detail2Options.map((d, i) => d.scrub ? (
+                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.durDragMove} onPointerUp={v.durDragEnd} onPointerCancel={v.durDragEnd}
+                        style={S(`flex-shrink:0;display:flex;align-items:center;gap:3px;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:ns-resize;touch-action:pan-x;user-select:none`)}>
+                        {d.label}
+                        {d.on && <Sym style={{ fontSize: 12, color: d.fg, opacity: 0.7 }}>unfold_more</Sym>}
+                      </button>
+                    ) : (
                       <button key={i} type="button" onClick={d.onTap} style={S(`flex-shrink:0;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:pointer`)}>{d.label}</button>
                     ))}
                   </div>
