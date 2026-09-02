@@ -2,7 +2,8 @@ x-laravel-env: &laravel-env
   APP_NAME: "Baby Log"
   APP_ENV: production
   APP_DEBUG: "false"
-  APP_KEY: "***REMOVED-ROTATED***="
+  # set in the git-ignored .env — generate with: echo "base64:$(openssl rand -base64 32)"
+  APP_KEY: ${APP_KEY:?set APP_KEY in .env}
   APP_URL: "http://localhost:3500"
   LOG_CHANNEL: stderr
   DB_CONNECTION: sqlite
@@ -13,7 +14,7 @@ x-laravel-env: &laravel-env
   BROADCAST_CONNECTION: reverb
   REVERB_APP_ID: babylog
   REVERB_APP_KEY: babylog-local-key
-  REVERB_APP_SECRET: ***REMOVED-ROTATED***
+  REVERB_APP_SECRET: ${REVERB_APP_SECRET:?set REVERB_APP_SECRET in .env}
   REVERB_HOST: reverb
   REVERB_PORT: "8080"
   REVERB_SCHEME: http
