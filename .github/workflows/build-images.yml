@@ -1,0 +1,62 @@
+# Publishes app + api images to GHCR on every push to main.
+# Groundwork for the Unraid Community Apps release: templates will point at
+# these images instead of building from source.
+name: build-images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+      - name: Install API dependencies
+        working-directory: api
+        run: composer install --no-interaction --prefer-dist
+      - name: Run API tests
+        working-directory: api
+        env:
+          BROADCAST_CONNECTION: log
+        run: php artisan test --compact
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/baby-log-app:latest
+            ghcr.io/${{ github.repository_owner }}/baby-log-app:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push api image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/baby-log-api:latest
+            ghcr.io/${{ github.repository_owner }}/baby-log-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

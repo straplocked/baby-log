@@ -7,7 +7,7 @@ import Pusher from 'pusher-js'
 
 window.Pusher = Pusher
 
-const REVERB_KEY = 'babylog-local-key'
+const REVERB_KEY = import.meta.env.VITE_REVERB_APP_KEY || 'babylog-local-key'
 
 let echo = null
 

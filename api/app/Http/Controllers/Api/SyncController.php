@@ -54,7 +54,7 @@ class SyncController extends Controller
             ['name' => $data['name'], 'age_label' => $data['age'] ?? null],
         );
 
-        broadcast(new HouseholdTouched($household->id, 'baby'))->toOthers();
+        HouseholdTouched::send($household->id, 'baby');
 
         return response()->json(['ok' => true]);
     }
@@ -63,11 +63,26 @@ class SyncController extends Controller
     {
         $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
 
-        $request->user()->household->update(['invite_email' => strtolower($data['email'])]);
+        $household = $request->user()->household;
+        if ($household->users()->count() >= config('babylog.max_household_users')) {
+            return response()->json(['message' => 'This log already has both grown-ups.'], 422);
+        }
 
-        broadcast(new HouseholdTouched($request->user()->household_id, 'invite'))->toOthers();
+        // single-use code, shown once to the inviter; the partner enters it at sign-up
+        $code = '';
+        $alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+        for ($i = 0; $i < 6; $i++) {
+            $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
 
-        return response()->json(['ok' => true]);
+        $household->update([
+            'invite_email' => strtolower($data['email']),
+            'invite_code_hash' => hash('sha256', $code),
+        ]);
+
+        HouseholdTouched::send($household->id, 'invite');
+
+        return response()->json(['ok' => true, 'code' => $code]);
     }
 
     /** Batch upsert from the client outbox. Client ids win; latest write wins. */
@@ -78,7 +93,7 @@ class SyncController extends Controller
             'entries.*.id' => ['required', 'string', 'max:64'],
             'entries.*.type' => ['required', 'string', 'max:20'],
             'entries.*.t' => ['required', 'integer'],
-            'entries.*.detail' => ['nullable'],
+            'entries.*.detail' => ['nullable', 'string', 'max:100'],
             'entries.*.deleted' => ['nullable', 'boolean'],
         ]);
 
@@ -104,7 +119,7 @@ class SyncController extends Controller
             );
         }
 
-        broadcast(new HouseholdTouched($user->household_id, 'entries'))->toOthers();
+        HouseholdTouched::send($user->household_id, 'entries');
 
         return response()->json(['ok' => true, 'serverTime' => now()->getTimestampMs()]);
     }

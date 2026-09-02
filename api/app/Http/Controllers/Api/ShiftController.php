@@ -25,7 +25,7 @@ class ShiftController extends Controller
             ]);
         }
 
-        broadcast(new HouseholdTouched($household->id, 'shift'))->toOthers();
+        HouseholdTouched::send($household->id, 'shift');
 
         return response()->json(['ok' => true]);
     }
@@ -58,7 +58,7 @@ class ShiftController extends Controller
 
         $household->update(['on_duty_user_id' => $user->id]);
 
-        broadcast(new HouseholdTouched($household->id, 'shift'))->toOthers();
+        HouseholdTouched::send($household->id, 'shift');
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }
@@ -77,7 +77,7 @@ class ShiftController extends Controller
         $shift = $user->household->shifts()->where('state', 'active')->where('user_id', $user->id)->latest('id')->first();
         $shift?->update(['plan' => $data['plan']]);
 
-        broadcast(new HouseholdTouched($user->household_id, 'shift'))->toOthers();
+        HouseholdTouched::send($user->household_id, 'shift');
 
         return response()->json(['ok' => true]);
     }
@@ -102,7 +102,7 @@ class ShiftController extends Controller
 
         $household->update(['on_duty_user_id' => $partner?->id ?? $user->id]);
 
-        broadcast(new HouseholdTouched($household->id, 'shift'))->toOthers();
+        HouseholdTouched::send($household->id, 'shift');
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }

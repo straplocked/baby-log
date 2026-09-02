@@ -19,11 +19,23 @@ Three taps from pocket to logged. An installable, local-first PWA for two parent
 - **Shifts are real between two accounts**: request a handoff with a note ("Ask X to take over"), the partner sees the incoming card and accepts, hand back generates a shift report that auto-surfaces on the other phone.
 - **Docker**: three services — the PWA (Node build → nginx, which proxies `/api` to the API and `/app` websockets to Reverb), the Laravel API (`php artisan serve` + SQLite volume), and Reverb (`php artisan reverb:start`).
 
+- **Invite-only by default**: sign-up is open for the first account on an instance and for emails with a pending household invite — nobody else (set `BABYLOG_OPEN_REGISTRATION=true` to change). Auth endpoints are throttled; API and Reverb are never published in the Unraid deploy, only the app port.
+
 ## Run
 
 ```bash
 docker compose up -d --build   # app on http://localhost:3500 (API :3501, Reverb :3502 for dev)
 ```
+
+## Unraid
+
+One command installs (and later updates — data survives in `appdata/baby-log/data`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/babylog.sh | sh
+```
+
+Requires the *Docker Compose Manager* plugin from Community Apps. Fresh `APP_KEY`/Reverb secrets are generated into `appdata/baby-log/.env` on first run. Point your reverse proxy (e.g. NPM) at port 3500 with websocket support enabled.
 
 Frontend dev mode (proxies `/api` to the dockerized API on :3501):
 

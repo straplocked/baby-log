@@ -29,7 +29,7 @@ async function call(path, { method = 'GET', body } = {}) {
 }
 
 export const api = {
-  register: b => call('/register', { method: 'POST', body: b }),
+  register: b => call('/register', { method: 'POST', body: b }), // {name, email, password, invite?}
   login: b => call('/login', { method: 'POST', body: b }),
   logout: () => call('/logout', { method: 'POST' }),
   state: since => call('/state?since=' + (since || 0)),

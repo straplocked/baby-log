@@ -6,6 +6,8 @@ RUN npm ci
 COPY vite.config.js index.html ./
 COPY public ./public
 COPY src ./src
+ARG VITE_REVERB_APP_KEY=babylog-local-key
+ENV VITE_REVERB_APP_KEY=$VITE_REVERB_APP_KEY
 RUN npm run build
 
 # Serve stage

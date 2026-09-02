@@ -1,0 +1,55 @@
+# Baby Log on Unraid — run via deploy/unraid/babylog.sh (handles .env secrets,
+# source updates, and rebuilds). Only the app port is published; API and Reverb
+# stay internal behind the app container's nginx.
+x-laravel-env: &laravel-env
+  APP_NAME: "Baby Log"
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY}
+  APP_URL: ${APP_URL:-http://localhost:3500}
+  LOG_CHANNEL: stderr
+  DB_CONNECTION: sqlite
+  DB_DATABASE: /data/database.sqlite
+  SESSION_DRIVER: cookie
+  CACHE_STORE: file
+  QUEUE_CONNECTION: sync
+  BROADCAST_CONNECTION: reverb
+  REVERB_APP_ID: ${REVERB_APP_ID:-babylog}
+  REVERB_APP_KEY: ${REVERB_APP_KEY:-babylog-key}
+  REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+  REVERB_HOST: reverb
+  REVERB_PORT: "8080"
+  REVERB_SCHEME: http
+  # comma-separated list of hostnames allowed to open websockets, e.g. "babylog.example.com"
+  REVERB_ALLOWED_ORIGINS: ${REVERB_ALLOWED_ORIGINS:-*}
+  REVERB_APP_MAX_CONNECTIONS: ${REVERB_APP_MAX_CONNECTIONS:-100}
+  REVERB_APP_RATE_LIMITING_ENABLED: "true"
+
+services:
+  app:
+    build:
+      context: ../..
+      args:
+        VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-babylog-key}
+    container_name: baby-log-app
+    ports:
+      - "${APP_PORT:-3500}:80"
+    depends_on:
+      - api
+      - reverb
+    restart: unless-stopped
+
+  api:
+    build: ../../api
+    container_name: baby-log-api
+    environment: *laravel-env
+    volumes:
+      - ${DATA_DIR:-/mnt/user/appdata/baby-log/data}:/data
+    restart: unless-stopped
+
+  reverb:
+    build: ../../api
+    container_name: baby-log-reverb
+    command: ["reverb"]
+    environment: *laravel-env
+    restart: unless-stopped

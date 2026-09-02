@@ -27,7 +27,7 @@ const PARTNER_COLOR = '#7C8C5A'
 // ── local-first persistence (per-device cache; server is the shared log) ─────
 const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
-  'me', 'partner', 'invitePending', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
+  'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote']
 
 function loadSaved() {
@@ -45,7 +45,8 @@ export default class App extends React.Component {
     super(props)
     this.state = {
       screen: 'splash', authMode: 'signup', tick: 0,
-      authName: '', authEmail: '', authPassword: '', authError: null, authBusy: false,
+      authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
+      inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, detail: null, editId: null,
       toast: null, lastAdded: null,
@@ -161,7 +162,7 @@ export default class App extends React.Component {
     this.setState({ authBusy: true, authError: null })
     try {
       if (s.authMode === 'signup') {
-        const r = await api.register({ name: s.authName.trim() || 'Parent', email: s.authEmail.trim(), password: s.authPassword })
+        const r = await api.register({ name: s.authName.trim() || 'Parent', email: s.authEmail.trim(), password: s.authPassword, invite: s.authInvite.trim() || undefined })
         setToken(r.token)
       } else {
         const r = await api.login({ email: s.authEmail.trim(), password: s.authPassword })
@@ -191,8 +192,8 @@ export default class App extends React.Component {
     const email = this.state.inviteField.trim()
     if (!email) return
     try {
-      await api.invite(email)
-      this.setState({ invitePending: email, toast: 'Invited ' + email + ' — they’ll land in this log', lastAdded: null })
+      const r = await api.invite(email)
+      this.setState({ invitePending: email, inviteCode: r.code, toast: 'Invited ' + email + ' — their code is ' + r.code, lastAdded: null })
       this.bumpToast()
     } catch (e) {
       this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', lastAdded: null })
@@ -555,6 +556,7 @@ export default class App extends React.Component {
       authCta: s.authBusy ? 'One sec…' : (s.authMode === 'login' ? 'Log in' : 'Create account'),
       authError: s.authError,
       authName: s.authName, setAuthName: e => this.setState({ authName: e.target.value }),
+      authInvite: s.authInvite, setAuthInvite: e => this.setState({ authInvite: e.target.value }),
       authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
       authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
       socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
@@ -628,7 +630,7 @@ export default class App extends React.Component {
         ? 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '. Handy for knowing whether the next wake-up is hunger or something else.'
         : 'Keep logging — once there’s a rhythm, it shows up here.',
       logout: () => this.doLogout(true),
-      invitePending: s.invitePending,
+      invitePending: s.invitePending, inviteCode: s.inviteCode,
     }
   }
 
@@ -685,6 +687,9 @@ export default class App extends React.Component {
               )}
               <input placeholder="Email" type="email" value={v.authEmail} onChange={v.setAuthEmail} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
               <input placeholder="Password" type="password" value={v.authPassword} onChange={v.setAuthPassword} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+              {v.isSignup && (
+                <input placeholder="Invite code — only if a partner invited you" value={v.authInvite} onChange={v.setAuthInvite} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+              )}
             </div>
             {v.isLogin && (
               <div style={S('display:flex;justify-content:flex-end;padding-top:10px')}><a href="#" onClick={e => e.preventDefault()} style={S('font-size:13.5px;font-weight:600;color:#5F6E42')}>Forgot password?</a></div>
@@ -959,7 +964,7 @@ export default class App extends React.Component {
               </div>
 
               {v.invitePending && (
-                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>Invite waiting for {v.invitePending} — they sign up with that email and land here.</div>
+                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>Invite waiting for {v.invitePending} — they sign up with that email{v.inviteCode ? ' and code ' + v.inviteCode : ''} and land here.</div>
               )}
               <div style={S('text-align:center;padding:16px 0 0')}>
                 <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>

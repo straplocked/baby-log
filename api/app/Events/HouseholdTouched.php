@@ -19,6 +19,24 @@ class HouseholdTouched implements ShouldBroadcastNow
     {
     }
 
+    /**
+     * Broadcast best-effort: realtime is a nicety — a Reverb hiccup must never
+     * fail the write that triggered it. The PendingBroadcast dispatches on
+     * destruct, so it's unset inside the try to catch transport errors.
+     */
+    public static function send(int $householdId, string $kind, bool $toOthers = true): void
+    {
+        try {
+            $pending = broadcast(new self($householdId, $kind));
+            if ($toOthers) {
+                $pending->toOthers();
+            }
+            unset($pending);
+        } catch (\Throwable) {
+            // socket server unreachable — clients converge on their fallback poll
+        }
+    }
+
     public function broadcastOn(): PrivateChannel
     {
         return new PrivateChannel('household.'.$this->householdId);

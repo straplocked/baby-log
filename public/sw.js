@@ -31,6 +31,9 @@ self.addEventListener('fetch', e => {
     return
   }
 
+  // never cache the API or the websocket auth — always live
+  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/app')) return
+
   const cacheable = url.origin === location.origin
     || url.hostname === 'fonts.googleapis.com'
     || url.hostname === 'fonts.gstatic.com'
