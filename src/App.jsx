@@ -87,6 +87,7 @@ export default class App extends React.Component {
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null,
+      sheetDragY: 0, sheetDragging: false, sheetTall: false,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
@@ -425,7 +426,7 @@ export default class App extends React.Component {
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null })
+    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, sheetTall: false, sheetDragY: 0 })
   }
   defaultDetail(k) {
     const d = T(k).detail
@@ -452,7 +453,30 @@ export default class App extends React.Component {
     if (type === 'pump') return { detail: n, detail2: mins }
     return { detail: d, detail2: null }
   }
-  closeSheet = () => this.setState({ sheet: false })
+  closeSheet = () => this.setState({ sheet: false, sheetTall: false, sheetDragY: 0, sheetDragging: false })
+  // handle gestures: drag down dismisses, drag up expands, from tall a short down-drag collapses
+  sheetDragStart = e => {
+    this._sheetDrag = { y0: e.clientY, lastY: e.clientY, lastT: Date.now(), vel: 0 }
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* best-effort; drag still tracks */ }
+    this.setState({ sheetDragging: true })
+  }
+  sheetDragMove = e => {
+    const d = this._sheetDrag; if (!d) return
+    const now = Date.now()
+    d.vel = (e.clientY - d.lastY) / Math.max(1, now - d.lastT)
+    d.lastY = e.clientY; d.lastT = now
+    this.setState({ sheetDragY: e.clientY - d.y0 })
+  }
+  sheetDragEnd = () => {
+    const d = this._sheetDrag; if (!d) return
+    this._sheetDrag = null
+    const dy = this.state.sheetDragY, vel = d.vel
+    const reset = { sheetDragY: 0, sheetDragging: false }
+    if (dy > 110 || (dy > 30 && vel > 0.55)) { this.setState(reset); return this.closeSheet() }
+    if (dy < -40 || vel < -0.55) return this.setState({ ...reset, sheetTall: true })
+    if (this.state.sheetTall && dy > 40) return this.setState({ ...reset, sheetTall: false })
+    this.setState(reset)
+  }
   pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k), detail2: s.sel === k ? s.detail2 : this.defaultDetail2(k) }))
   nudge = n => () => this.setState({ offset: n, pickedT: null })
   pickTime = e => {
@@ -505,7 +529,7 @@ export default class App extends React.Component {
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
     this._base = e.t
-    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, ...this.decompose(e.type, e.detail) })
+    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, sheetTall: false, sheetDragY: 0, ...this.decompose(e.type, e.detail) })
   }
   remove = () => {
     const id = this.state.editId
@@ -770,6 +794,9 @@ export default class App extends React.Component {
       offline: s.offline,
 
       sheetOpen: s.sheet,
+      sheetTranslate: s.sheetDragY > 0 ? s.sheetDragY : (s.sheetTall ? Math.max(s.sheetDragY / 4, -18) : Math.max(s.sheetDragY / 2, -46)),
+      sheetDragging: s.sheetDragging, sheetTall: s.sheetTall,
+      sheetDragStart: this.sheetDragStart, sheetDragMove: this.sheetDragMove, sheetDragEnd: this.sheetDragEnd,
       sheetKicker: s.editId ? 'Editing entry'
         : (backMin < 1 ? 'stamped now' : this.dur(backMin) + ' earlier'),
       stampTime: this.clock(stampT),
@@ -1328,13 +1355,21 @@ export default class App extends React.Component {
         {v.sheetOpen && (
           <div style={S('position:absolute;inset:0;z-index:40')}>
             <div onClick={v.closeSheet} style={S('position:absolute;inset:0;background:rgba(30,27,20,0.42);backdrop-filter:blur(2px)')} />
-            <div style={S('position:absolute;left:0;right:0;bottom:0;background:#FAF6EF;border-radius:34px 34px 0 0;padding:10px 16px 22px;box-shadow:0 -12px 40px rgba(0,0,0,0.18);overflow:hidden')}>
+            <div style={{
+              ...S('position:absolute;left:0;right:0;bottom:0;background:#FAF6EF;border-radius:34px 34px 0 0;padding:10px 16px 22px;box-shadow:0 -12px 40px rgba(0,0,0,0.18);overflow:hidden;max-height:92vh;display:flex;flex-direction:column'),
+              height: v.sheetTall ? '86vh' : 'auto',
+              transform: `translateY(${v.sheetTranslate}px)`,
+              transition: v.sheetDragging ? 'none' : 'transform 0.28s cubic-bezier(0.32,0.72,0,1)',
+            }}>
               <div style={S('position:absolute;inset:0;z-index:0')}>
                 <img src="/art/sheet-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
                 <div style={S('position:absolute;inset:0;background:rgba(250,246,239,0.7);pointer-events:none')} />
               </div>
-              <div style={S('position:relative;z-index:1')}>
-                <div style={S('width:38px;height:4px;border-radius:99px;background:rgba(38,35,29,0.16);margin:0 auto 14px')} />
+              <div onPointerDown={v.sheetDragStart} onPointerMove={v.sheetDragMove} onPointerUp={v.sheetDragEnd} onPointerCancel={v.sheetDragEnd}
+                style={S('position:relative;z-index:1;flex-shrink:0;padding:13px 0 13px;margin:-10px -16px 0;cursor:grab;touch-action:none')}>
+                <div style={S('width:38px;height:4px;border-radius:99px;background:rgba(38,35,29,0.16);margin:0 auto')} />
+              </div>
+              <div style={S('position:relative;z-index:1;flex:1;min-height:0;overflow:auto')}>
 
                 <div style={S('display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px 12px')}>
                   <label style={S('position:relative;display:flex;flex-direction:column;gap:3px;cursor:pointer')}>
