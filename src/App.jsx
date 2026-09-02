@@ -34,6 +34,18 @@ function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
 }
 const numify = d => (typeof d === 'string' && /^\d+(\.\d+)?$/.test(d)) ? Number(d) : d
+// detail strings can carry extras: bottle "4 breastmilk", nurse "Left · 30m", pump "3 · 15m"
+const dSplit = d => {
+  d = d == null ? '' : String(d)
+  const lead = /^([\d.]+)\s*(m\b)?/.exec(d)
+  const mm = /(\d+)\s*m\b/.exec(d)
+  return {
+    n: lead && lead[1] && !lead[2] ? Number(lead[1]) : null,
+    mins: mm ? Number(mm[1]) : null,
+    side: /left/i.test(d) ? 'Left' : /right/i.test(d) ? 'Right' : /both/i.test(d) ? 'Both' : null,
+    milk: /breast/i.test(d) ? 'breastmilk' : /formula/i.test(d) ? 'formula' : null,
+  }
+}
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'e' + Date.now() + Math.random().toString(36).slice(2, 9))
 
 const Sym = ({ style, children }) => (
@@ -48,7 +60,7 @@ export default class App extends React.Component {
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
-      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, editId: null,
+      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks',
       me: null, partner: null, invitePending: null,
@@ -240,10 +252,18 @@ export default class App extends React.Component {
     return diff === 0 ? '' : diff === 1 ? 'Yesterday' : diff + ' days ago'
   }
   unit() { return this.props.unit ?? 'oz' }
+  fmtDetail(d) {
+    const { n, mins, side, milk } = dSplit(d), p = []
+    if (n != null) p.push(n + ' ' + this.unit())
+    if (milk) p.push(milk)
+    if (side) p.push(side)
+    if (mins != null) p.push(this.dur(mins))
+    return p.join(' · ')
+  }
   subFor(e) {
     const day = this.dayOf(e.t), p = []
-    if (e.type === 'bottle' || e.type === 'pump') p.push(e.detail + ' ' + this.unit())
-    if (e.type === 'nurse') p.push(e.detail || 'either side')
+    if ((e.type === 'bottle' || e.type === 'pump') && e.detail != null) p.push(this.fmtDetail(e.detail) || String(e.detail))
+    if (e.type === 'nurse') p.push(e.detail ? this.fmtDetail(e.detail) || String(e.detail) : 'either side')
     if (e.type === 'sleep') p.push(this.dur(e.detail))
     if (DIAPERS.includes(e.type)) p.push(e.type === 'both' ? 'wet + dirty' : e.type)
     if (e.type === 'meds') p.push('vitamin D')
@@ -328,17 +348,35 @@ export default class App extends React.Component {
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null })
+    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null })
   }
   defaultDetail(k) {
     const d = T(k).detail
-    if (d === 'amount') { const l = this.lastOf([k]); return l ? l.detail : 4 }
-    if (d === 'side') { const l = this.lastOf(['nurse']); return l && l.detail === 'Left' ? 'Right' : 'Left' }
+    if (d === 'amount') { const l = this.lastOf([k]); return l ? (dSplit(l.detail).n ?? 4) : 4 }
+    if (d === 'side') { const l = this.lastOf(['nurse']); return l && dSplit(l.detail).side === 'Left' ? 'Right' : 'Left' }
     if (d === 'dur') return 45
     return null
   }
+  defaultDetail2(k) {
+    if (k === 'bottle') { const l = this.lastOf(['bottle']); return l ? dSplit(l.detail).milk : null }
+    return null
+  }
+  // detail state ↔ wire string: primary (amount/side/duration) in `detail`, extra (milk/minutes) in `detail2`
+  composeDetail(k) {
+    const a = this.state.detail, b = this.state.detail2
+    if (k === 'bottle') return [a, b].filter(x => x != null && x !== '').join(' ') || null
+    if (k === 'nurse' || k === 'pump') return [a, b != null ? b + 'm' : null].filter(x => x != null && x !== '').join(' · ') || null
+    return a
+  }
+  decompose(type, d) {
+    const { n, mins, side, milk } = dSplit(d)
+    if (type === 'bottle') return { detail: n, detail2: milk }
+    if (type === 'nurse') return { detail: side, detail2: mins }
+    if (type === 'pump') return { detail: n, detail2: mins }
+    return { detail: d, detail2: null }
+  }
   closeSheet = () => this.setState({ sheet: false })
-  pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k) }))
+  pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k), detail2: s.sel === k ? s.detail2 : this.defaultDetail2(k) }))
   nudge = n => () => this.setState({ offset: n, pickedT: null })
   pickTime = e => {
     const [h, m] = e.target.value.split(':').map(Number)
@@ -352,7 +390,7 @@ export default class App extends React.Component {
 
   save = () => {
     const key = this.state.sel || this.predict() || 'bottle'
-    const t = this.stamp(), detail = this.state.detail
+    const t = this.stamp(), detail = this.composeDetail(key)
     if (this.state.editId) {
       const id = this.state.editId
       this.setState(s => ({
@@ -390,7 +428,7 @@ export default class App extends React.Component {
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
     this._base = e.t
-    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, detail: e.detail })
+    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, ...this.decompose(e.type, e.detail) })
   }
   remove = () => {
     const id = this.state.editId
@@ -448,7 +486,7 @@ export default class App extends React.Component {
 
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0)
     const td = live.filter(e => e.t >= midnight.getTime())
-    const oz = td.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
+    const oz = td.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const todaySummary = td.filter(e => FEEDS.includes(e.type)).length + ' feeds · ' + oz + this.unit() + ' · ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers'
 
     const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
@@ -469,12 +507,17 @@ export default class App extends React.Component {
       : kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v }))
       : kind === 'dur' ? [15, 30, 45, 90, 150].map(v => ({ v, label: this.dur(v) })) : []
     const detailOptions = opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
-    const detailStr = kind === 'amount' ? ' ' + s.detail + ' ' + this.unit() : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : ''
+    const kind2 = st.key === 'bottle' ? 'milk' : st.key === 'nurse' || st.key === 'pump' ? 'mins' : null
+    const opts2 = kind2 === 'milk' ? [{ v: 'breastmilk', label: 'Breast milk' }, { v: 'formula', label: 'Formula' }]
+      : kind2 === 'mins' ? [10, 15, 20, 30, 45].map(v => ({ v, label: this.dur(v) })) : []
+    const detail2Options = opts2.map(o => ({ label: o.label, onTap: () => this.setState(x => ({ detail2: x.detail2 === o.v ? null : o.v })), ...this.chip(s.detail2 === o.v, st.color) }))
+    const detailStr = (kind === 'amount' ? (s.detail != null ? ' ' + s.detail + ' ' + this.unit() : '') : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : '')
+      + (s.detail2 != null ? (kind2 === 'milk' ? ' · ' + (s.detail2 === 'formula' ? 'formula' : 'breast milk') : ' · ' + this.dur(s.detail2)) : '')
 
     const feed = this.lastOf(FEEDS), dia = this.lastOf(DIAPERS), sleep = this.lastOf(['sleep'])
     const handoffRows = [
       { label: 'Last fed', value: feed ? this.elapsed(feed.t) + ' ago' : '—' },
-      { label: 'That feed was', value: feed ? (feed.type === 'bottle' ? feed.detail + ' ' + this.unit() + ' bottle' : 'nursed, ' + (feed.detail || 'either')) : '—' },
+      { label: 'That feed was', value: feed ? (feed.type === 'bottle' ? (this.fmtDetail(feed.detail) || feed.detail + ' ' + this.unit()) + ' bottle' : 'nursed, ' + (feed.detail ? this.fmtDetail(feed.detail) || feed.detail : 'either')) : '—' },
       { label: 'Last diaper', value: dia ? this.elapsed(dia.t) + ' ago · ' + (dia.type === 'both' ? 'wet + dirty' : dia.type) : '—' },
       { label: 'Last nap ended', value: sleep ? this.elapsed(sleep.t) + ' ago · ' + this.dur(sleep.detail) : '—' },
       { label: 'Today so far', value: td.filter(e => FEEDS.includes(e.type)).length + ' feeds / ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' },
@@ -482,7 +525,7 @@ export default class App extends React.Component {
 
     const week = live.filter(e => e.t >= midnight.getTime() - 6 * DAY)
     const feedsWk = week.filter(e => FEEDS.includes(e.type))
-    const ozWk = week.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
+    const ozWk = week.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const naps = week.filter(e => e.type === 'sleep')
     const sorted = feedsWk.map(e => e.t).sort((a, b) => a - b)
     let gaps = []
@@ -519,7 +562,7 @@ export default class App extends React.Component {
       return {
         label: (t.key === 'bottle' ? 'Feed' : t.label) + ' · ' + this.clock(p.at).replace(':00', ''),
         icon: t.icon, color: t.color,
-        sub: done ? 'logged ' + this.clock(p.hit.t) + (p.hit.detail && FEEDS.includes(p.hit.type) ? ' · ' + p.hit.detail + (p.hit.type === 'bottle' ? ' ' + this.unit() : '') : '') : isNext ? (late ? 'running ' + rel + ' late' : 'next up') : 'later',
+        sub: done ? 'logged ' + this.clock(p.hit.t) + (p.hit.detail && FEEDS.includes(p.hit.type) ? ' · ' + (this.fmtDetail(p.hit.detail) || p.hit.detail) : '') : isNext ? (late ? 'running ' + rel + ' late' : 'next up') : 'later',
         when: done ? 'done' : late ? 'now' : 'in ' + rel,
         stateIcon: done ? 'check_circle' : isNext ? 'schedule' : 'radio_button_unchecked',
         stateColor: done ? '#7C8C5A' : isNext ? (late ? '#A85A45' : '#4A5533') : '#CFC7B4',
@@ -539,7 +582,7 @@ export default class App extends React.Component {
     })
     const t1 = this.clock(rhythm[0].at), t2 = rhythm[1] ? this.clock(rhythm[1].at) : ''
     const sf = shiftEntries.filter(e => FEEDS.includes(e.type)), sd = shiftEntries.filter(e => DIAPERS.includes(e.type)), ss = shiftEntries.filter(e => e.type === 'sleep')
-    const sOz = sf.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
+    const sOz = sf.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const reportRows = [
       { label: 'Feeds', value: sf.length ? sf.length + ' · ' + sf.map(e => this.clock(e.t)).join(', ') : 'none yet' },
       { label: 'Total from bottles', value: sOz + ' ' + this.unit() },
@@ -601,6 +644,7 @@ export default class App extends React.Component {
       showTimePicker: e => { try { e.currentTarget.showPicker() } catch { /* older browsers fall back to focus */ } },
       nudges, types,
       hasDetail: !!kind, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
+      hasDetail2: !!kind2, detail2Label: kind2 === 'milk' ? 'Milk' : 'Duration', detail2Options,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '',
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
@@ -1069,6 +1113,15 @@ export default class App extends React.Component {
                   <div style={S('display:flex;align-items:center;gap:8px;padding:14px 2px 0;overflow:auto')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detailLabel}</div>
                     {v.detailOptions.map((d, i) => (
+                      <button key={i} type="button" onClick={d.onTap} style={S(`flex-shrink:0;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:pointer`)}>{d.label}</button>
+                    ))}
+                  </div>
+                )}
+
+                {v.hasDetail2 && (
+                  <div style={S('display:flex;align-items:center;gap:8px;padding:10px 2px 0;overflow:auto')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detail2Label}</div>
+                    {v.detail2Options.map((d, i) => (
                       <button key={i} type="button" onClick={d.onTap} style={S(`flex-shrink:0;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:pointer`)}>{d.label}</button>
                     ))}
                   </div>
