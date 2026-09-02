@@ -1,12 +1,12 @@
 * { -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
 body { background: #EDE7DC; }
 a { color: #6B7A4C; text-decoration: none; }
 a:hover { color: #55632F; }
 *::-webkit-scrollbar { width: 0; height: 0; }
 input { font-family: inherit; }
 
-#root { min-height: 100dvh; display: flex; justify-content: center; }
+#root { height: 100dvh; display: flex; justify-content: center; }
 
 .app {
   position: relative;
