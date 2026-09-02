@@ -86,7 +86,7 @@ export default class App extends React.Component {
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
-      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null,
+      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
@@ -304,8 +304,8 @@ export default class App extends React.Component {
     if (mins != null) p.push(this.dur(mins))
     return p.join(' · ')
   }
-  subFor(e) {
-    const day = this.dayOf(e.t), p = []
+  subFor(e, noDay) {
+    const day = noDay ? '' : this.dayOf(e.t), p = []
     if ((e.type === 'bottle' || e.type === 'pump') && e.detail != null) p.push(this.fmtDetail(e.detail) || String(e.detail))
     if (e.type === 'nurse') p.push(e.detail ? this.fmtDetail(e.detail) || String(e.detail) : 'either side')
     if (e.type === 'sleep') p.push(this.dur(e.detail))
@@ -575,6 +575,35 @@ export default class App extends React.Component {
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
     }))
 
+    // every day on the device, grouped for the History drill-down
+    const dayKey = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+    const fmtDay = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
+    const byDay = new Map()
+    for (const e of live) { const k = dayKey(e.t); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(e) }
+    const daySummary = evs => {
+      const feeds = evs.filter(e => FEEDS.includes(e.type))
+      const dOz = feeds.reduce((a, e) => a + (e.type === 'bottle' ? dSplit(e.detail).n || 0 : 0), 0)
+      const p = [feeds.length + ' feeds']
+      if (dOz) p.push(dOz + ' ' + this.unit())
+      const dSl = evs.filter(e => e.type === 'sleep').reduce((a, e) => a + (Number(e.detail) || 0), 0)
+      if (this.trackOn('sleep') && dSl) p.push(this.dur(dSl) + ' sleep')
+      const dDia = evs.filter(e => DIAPERS.includes(e.type)).length
+      if (this.trackOn('diapers') && dDia) p.push(dDia + ' diapers')
+      return p.join(' · ')
+    }
+    const historyDays = [...byDay.keys()].sort().reverse().map(k => ({
+      key: k, label: fmtDay(k), sub: daySummary(byDay.get(k)), onTap: () => this.setState({ historyDay: k }),
+    }))
+    const dayEvs = s.historyDay ? byDay.get(s.historyDay) || [] : []
+    const dayView = s.historyDay ? {
+      label: fmtDay(s.historyDay), sub: daySummary(dayEvs),
+      rows: [...dayEvs].sort((a, b) => a.t - b.t).map(e => ({
+        time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e, true),
+        icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
+      })),
+      back: () => this.setState({ historyDay: null }),
+    } : null
+
     // hidden trackers drop out of the sheet, except while editing an old entry of that type
     const types = TYPES.filter(t => this.typeOn(t.key) || t.key === s.sel).map(t => {
       const on = t.key === s.sel
@@ -585,7 +614,7 @@ export default class App extends React.Component {
       .map(d => ({ label: d.label, onTap: this.nudge(d.n), ...this.chip(s.pickedT == null && s.offset === d.n, OLIVE) }))
 
     const kind = st.detail
-    const opts = kind === 'amount' ? [2, 3, 4, 5, 6].map(v => ({ v, label: v + ' ' + this.unit() }))
+    const opts = kind === 'amount' ? [2, 2.5, 3, 3.5, 4, 4.5, 5].map(v => ({ v, label: v + ' ' + this.unit() }))
       : kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v }))
       : kind === 'dur' ? [15, 30, 45, 90, 150].map(v => ({ v, label: this.dur(v) })) : []
     const detailOptions = opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
@@ -722,7 +751,7 @@ export default class App extends React.Component {
       socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
       loginTabBg: s.authMode === 'login' ? '#FFFDF8' : 'transparent', loginTabFg: s.authMode === 'login' ? '#26231D' : '#8C8474', loginTabShadow: s.authMode === 'login' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       signupTabBg: s.authMode === 'signup' ? '#FFFDF8' : 'transparent', signupTabFg: s.authMode === 'signup' ? '#26231D' : '#8C8474', signupTabShadow: s.authMode === 'signup' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
-      goHome: () => this.setState({ screen: 'home' }), goHistory: () => this.setState({ screen: 'history' }),
+      goHome: () => this.setState({ screen: 'home' }), goHistory: () => this.setState({ screen: 'history', historyDay: null }),
       homeTabBg: s.screen === 'home' ? 'rgba(124,140,90,0.14)' : '#FFFDF8',
       homeTabFg: s.screen === 'home' ? '#4A5533' : '#8C8474',
       histTabBg: s.screen === 'history' ? 'rgba(124,140,90,0.14)' : '#FFFDF8',
@@ -788,6 +817,7 @@ export default class App extends React.Component {
       setHandbackNote: e => this.setState({ handbackNote: e.target.value }),
 
       historySubtitle: feedsWk.length + ' feeds' + (this.trackOn('diapers') ? ' · ' + week.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : '') + ' logged',
+      historyDays, dayView,
       stats, feedBars: this.bars(FEEDS, 'oklch(0.60 0.075 130)'), diaperBars: this.bars(DIAPERS, 'oklch(0.60 0.075 210)'),
       feedUnitLabel: 'feeds',
       showDiaperChart: this.trackOn('diapers'),
@@ -1083,14 +1113,50 @@ export default class App extends React.Component {
         {v.isHistory && (
           <div style={S('flex:1;display:flex;flex-direction:column;min-height:0;position:relative;z-index:1')}>
             <div style={S('padding:10px 20px 12px;display:flex;align-items:center;gap:10px')}>
-              <Duck size={38} />
-              <div style={S('display:flex;flex-direction:column;gap:1px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Last 7 days</div>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.historySubtitle}</div>
-              </div>
+              {v.dayView ? (
+                <>
+                  <button type="button" onClick={v.dayView.back} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
+                    <Sym style={{ fontSize: 20, color: '#6E6659' }}>arrow_back</Sym>
+                  </button>
+                  <div style={S('display:flex;flex-direction:column;gap:1px')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>{v.dayView.label}</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.dayView.sub}</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Duck size={38} />
+                  <div style={S('display:flex;flex-direction:column;gap:1px')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Last 7 days</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.historySubtitle}</div>
+                  </div>
+                </>
+              )}
             </div>
 
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
+              {v.dayView ? (
+                <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);overflow:hidden')}>
+                  {v.dayView.rows.length === 0 && (
+                    <div style={S('padding:22px 16px;text-align:center;font-size:13.5px;color:#B5AC98;text-wrap:pretty')}>Nothing logged this day.</div>
+                  )}
+                  {v.dayView.rows.map((e, i) => (
+                    <button key={i} type="button" onClick={e.onEdit} className="hov-row" style={S('width:100%;background:none;border:none;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;cursor:pointer;text-align:left;font-family:inherit')}>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
+                      <div style={S('position:relative;width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
+                        <div style={S(`position:absolute;inset:0;background:${e.color};opacity:0.16`)} />
+                        <Sym style={{ position: 'relative', fontSize: 19, color: e.color }}>{e.icon}</Sym>
+                      </div>
+                      <div style={S('flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
+                        <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
+                        <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}</div>
+                      </div>
+                      <Sym style={{ fontSize: 18, color: '#CFC7B4', flexShrink: 0 }}>chevron_right</Sym>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+              <>
               <div style={S('display:grid;grid-template-columns:1fr 1fr;gap:10px')}>
                 {v.stats.map((st, i) => (
                   <div key={i} style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:24px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:13px 15px;display:flex;flex-direction:column;gap:4px')}>
@@ -1171,6 +1237,19 @@ export default class App extends React.Component {
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
               </div>
 
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 0 4px;margin-top:12px;overflow:hidden')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 16px 6px")}>All days</div>
+                {v.historyDays.map((d, i) => (
+                  <button key={d.key} type="button" onClick={d.onTap} className="hov-row" style={S('width:100%;background:none;border:none;border-top:1px solid rgba(38,35,29,0.06);padding:12px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;text-align:left;font-family:inherit')}>
+                    <div style={S('flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
+                      <div style={S('font-size:14.5px;font-weight:600;letter-spacing:-0.01em')}>{d.label}</div>
+                      <div style={S('font-size:11.5px;color:#8C8474')}>{d.sub}</div>
+                    </div>
+                    <Sym style={{ fontSize: 18, color: '#CFC7B4', flexShrink: 0 }}>chevron_right</Sym>
+                  </button>
+                ))}
+              </div>
+
               {v.trackRec && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:22px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px;margin-top:12px;display:flex;flex-direction:column;gap:12px')}>
                   <div style={S('display:flex;gap:12px;align-items:flex-start')}>
@@ -1207,6 +1286,8 @@ export default class App extends React.Component {
               <div style={S('text-align:center;padding:16px 0 0')}>
                 <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>
               </div>
+              </>
+              )}
             </div>
           </div>
         )}
