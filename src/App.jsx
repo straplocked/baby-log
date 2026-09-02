@@ -48,7 +48,7 @@ export default class App extends React.Component {
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
-      sheet: false, sel: null, offset: 0, detail: null, editId: null,
+      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, editId: null,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks',
       me: null, partner: null, invitePending: null,
@@ -323,12 +323,12 @@ export default class App extends React.Component {
     if (fMin / 165 >= dMin / 150) return feed && feed.type === 'nurse' ? 'nurse' : 'bottle'
     return 'wet'
   }
-  stamp() { return this._base + this.state.offset * 60000 }
+  stamp() { return this.state.pickedT ?? this._base + this.state.offset * 60000 }
 
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.setState({ sheet: true, editId: null, sel: k, offset: 0, detail: k ? this.defaultDetail(k) : null })
+    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null })
   }
   defaultDetail(k) {
     const d = T(k).detail
@@ -339,7 +339,16 @@ export default class App extends React.Component {
   }
   closeSheet = () => this.setState({ sheet: false })
   pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k) }))
-  nudge = n => () => this.setState({ offset: n })
+  nudge = n => () => this.setState({ offset: n, pickedT: null })
+  pickTime = e => {
+    const [h, m] = e.target.value.split(':').map(Number)
+    if (Number.isNaN(h) || Number.isNaN(m)) return
+    const d = new Date(this.stamp()); d.setHours(h, m, 0, 0)
+    let t = d.getTime()
+    // picking 11:50 PM shortly after midnight means last night, not later today
+    if (t > Date.now() + 60000) t -= DAY
+    this.setState({ pickedT: t, offset: 0 })
+  }
 
   save = () => {
     const key = this.state.sel || this.predict() || 'bottle'
@@ -381,7 +390,7 @@ export default class App extends React.Component {
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
     this._base = e.t
-    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, detail: e.detail })
+    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, detail: e.detail })
   }
   remove = () => {
     const id = this.state.editId
@@ -417,6 +426,7 @@ export default class App extends React.Component {
     const st = T(s.sel || 'bottle')
     const step = Number(this.props.timeStep ?? 5) || 5
     const stampT = s.sheet ? this.stamp() : Date.now()
+    const backMin = s.sheet ? Math.max(0, Math.round((this._base - stampT) / 60000)) : 0
 
     const me = s.me, partner = s.partner, sh = s.serverShift
     const myName = me?.name || 'You'
@@ -452,7 +462,7 @@ export default class App extends React.Component {
     })
 
     const nudges = [{ n: 0, label: 'now' }, { n: -step, label: '−' + step }, { n: -step * 3, label: '−' + step * 3 }, { n: -60, label: '−1h' }]
-      .map(d => ({ label: d.label, onTap: this.nudge(d.n), ...this.chip(s.offset === d.n, OLIVE) }))
+      .map(d => ({ label: d.label, onTap: this.nudge(d.n), ...this.chip(s.pickedT == null && s.offset === d.n, OLIVE) }))
 
     const kind = st.detail
     const opts = kind === 'amount' ? [2, 3, 4, 5, 6].map(v => ({ v, label: v + ' ' + this.unit() }))
@@ -582,8 +592,14 @@ export default class App extends React.Component {
       sinceCards: cards, todaySummary, timeline,
       offline: s.offline,
 
-      sheetOpen: s.sheet, sheetKicker: s.editId ? 'Editing entry' : (s.offset === 0 ? 'stamped now' : Math.abs(s.offset) + ' min earlier'),
-      stampTime: this.clock(stampT), nudges, types,
+      sheetOpen: s.sheet,
+      sheetKicker: s.editId ? 'Editing entry'
+        : (backMin < 1 ? 'stamped now' : this.dur(backMin) + ' earlier'),
+      stampTime: this.clock(stampT),
+      stampHM: String(new Date(stampT).getHours()).padStart(2, '0') + ':' + String(new Date(stampT).getMinutes()).padStart(2, '0'),
+      pickTime: this.pickTime,
+      showTimePicker: e => { try { e.currentTarget.showPicker() } catch { /* older browsers fall back to focus */ } },
+      nudges, types,
       hasDetail: !!kind, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '',
@@ -1018,10 +1034,14 @@ export default class App extends React.Component {
                 <div style={S('width:38px;height:4px;border-radius:99px;background:rgba(38,35,29,0.16);margin:0 auto 14px')} />
 
                 <div style={S('display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px 12px')}>
-                  <div style={S('display:flex;flex-direction:column;gap:3px')}>
+                  <label style={S('position:relative;display:flex;flex-direction:column;gap:3px;cursor:pointer')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>{v.sheetKicker}</div>
-                    <div style={S("font-family:'Nunito',sans-serif;font-size:31px;font-weight:700;letter-spacing:-0.04em")}>{v.stampTime}</div>
-                  </div>
+                    <div style={S('display:flex;align-items:baseline;gap:7px')}>
+                      <div style={S("font-family:'Nunito',sans-serif;font-size:31px;font-weight:700;letter-spacing:-0.04em")}>{v.stampTime}</div>
+                      <Sym style={{ fontSize: 15, color: '#B5AC98' }}>edit</Sym>
+                    </div>
+                    <input type="time" value={v.stampHM} onChange={v.pickTime} onClick={v.showTimePicker} style={S('position:absolute;inset:0;width:100%;height:100%;opacity:0;border:0;padding:0;margin:0;cursor:pointer')} />
+                  </label>
                   <div style={S('display:flex;gap:6px;padding-bottom:6px')}>
                     {v.nudges.map((n, i) => (
                       <button key={i} type="button" onClick={n.onTap} style={S(`background:${n.bg};border:1px solid ${n.border};border-radius:999px;padding:7px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:${n.fg};cursor:pointer;letter-spacing:-0.01em`)}>{n.label}</button>
