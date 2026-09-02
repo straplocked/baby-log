@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Api;
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
 use App\Models\Entry;
+use App\Models\User;
+use App\Services\PushService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 
 class SyncController extends Controller
 {
@@ -30,7 +33,7 @@ class SyncController extends Controller
         $shift = $household->shifts()->latest('id')->first();
 
         return response()->json([
-            'user' => ['id' => $user->id, 'name' => $user->name, 'householdId' => $user->household_id],
+            'user' => ['id' => $user->id, 'name' => $user->name, 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
             'invitePending' => $household->invite_email,
             'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label, 'birthdate' => $household->baby->birthdate] : null,
@@ -39,6 +42,7 @@ class SyncController extends Controller
             'shift' => $shift,
             'entries' => $entries,
             'serverTime' => now()->getTimestampMs(),
+            'vapidPublicKey' => app(PushService::class)->publicKey(),
         ]);
     }
 
@@ -158,7 +162,51 @@ class SyncController extends Controller
         }
 
         HouseholdTouched::send($user->household_id, 'entries');
+        $this->pingPartner($user, $data['entries']);
 
         return response()->json(['ok' => true, 'serverTime' => now()->getTimestampMs()]);
+    }
+
+    private const TYPE_LABELS = [
+        'bottle' => 'a bottle', 'nurse' => 'nursing', 'pump' => 'a pump',
+        'wet' => 'a wet diaper', 'dirty' => 'a dirty diaper', 'both' => 'a diaper',
+        'sleep' => 'sleep', 'bath' => 'a bath', 'meds' => 'meds',
+    ];
+
+    /**
+     * "Katrina logged a bottle" — opt-in partner-activity push, throttled to
+     * one ping per 10 minutes so a backfill burst doesn't rattle a phone.
+     */
+    private function pingPartner(User $user, array $entries): void
+    {
+        $live = array_values(array_filter($entries, fn ($e) => empty($e['deleted'])));
+        if (! $live) {
+            return;
+        }
+        $partner = $user->household->partnerOf($user);
+        if (! $partner || ! $partner->notifyPrefs()['partner'] || $partner->inQuietHours()) {
+            return;
+        }
+        $state = $partner->notify_state ?? [];
+        $nowMs = now()->getTimestampMs();
+        if (($state['partnerPingAt'] ?? 0) > $nowMs - 10 * 60000) {
+            return;
+        }
+        $partner->update(['notify_state' => array_merge($state, ['partnerPingAt' => $nowMs])]);
+
+        $first = $live[0];
+        $label = self::TYPE_LABELS[$first['type']] ?? $first['type'];
+        $tz = $partner->notifyPrefs()['tz'] ?: config('app.timezone');
+        try {
+            $at = Carbon::createFromTimestampMs($first['t'], $tz)->format('g:i A');
+        } catch (\Throwable) {
+            $at = Carbon::createFromTimestampMs($first['t'])->format('g:i A');
+        }
+        $bits = array_filter([
+            isset($first['detail']) && $first['detail'] !== '' ? (string) $first['detail'] : null,
+            $at,
+            count($live) > 1 ? '+'.(count($live) - 1).' more' : null,
+        ]);
+        app(PushService::class)->notify($partner, 'partner', $user->name.' logged '.$label, implode(' · ', $bits));
     }
 }

@@ -3,6 +3,7 @@ import { S } from './s'
 import Duck from './Duck'
 import { api, getToken, setToken } from './api'
 import { startEcho, stopEcho, isEchoConnected } from './echo'
+import { pushSupported, pushSubscription, subscribePush, deviceTz } from './push'
 
 // ── domain constants (from design/Baby Log.dc.html) ──────────────────────────
 const TYPES = [
@@ -54,7 +55,8 @@ const PARTNER_COLOR = '#7C8C5A'
 const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
-  'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate']
+  'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -94,6 +96,7 @@ export default class App extends React.Component {
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
+      notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
       shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
     }
     const saved = loadSaved()
@@ -114,6 +117,7 @@ export default class App extends React.Component {
     window.addEventListener('online', this._wake)
     document.addEventListener('visibilitychange', this._wake)
     if (getToken()) this.sync()
+    this.refreshPush()
   }
   componentWillUnmount() {
     clearInterval(this._iv); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
@@ -161,6 +165,11 @@ export default class App extends React.Component {
         // a toggle mid-flight makes a new settings object — only clear if nothing changed
         if (this.state.settings === pushed) this.setState({ settingsDirty: false })
       }
+      if (this.state.notifyPrefsDirty && this.state.notifyPrefs) {
+        const pushed = this.state.notifyPrefs
+        await api.saveNotifyPrefs(pushed)
+        if (this.state.notifyPrefs === pushed) this.setState({ notifyPrefsDirty: false })
+      }
       const st = await api.state(this.state.lastSync)
       this.applyState(st)
       if (this.state.offline) this.setState({ offline: false })
@@ -190,6 +199,8 @@ export default class App extends React.Component {
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
         next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [] }
       }
+      if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
+      if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
       if (st.baby) {
         next.babyName = st.baby.name
         if (st.baby.age) next.age = st.baby.age
@@ -258,7 +269,11 @@ export default class App extends React.Component {
   }
 
   doLogout = async (callApi = true) => {
-    if (callApi) { try { await api.logout() } catch { /* token dies anyway */ } }
+    if (callApi) {
+      // stop the server pushing at this device; the browser permission stays for next login
+      try { const sub = await pushSubscription(); if (sub) await api.pushUnsubscribe(sub.endpoint) } catch { /* best-effort */ }
+      try { await api.logout() } catch { /* token dies anyway */ }
+    }
     setToken(null)
     stopEcho()
     this._echoSig = null
@@ -271,7 +286,61 @@ export default class App extends React.Component {
       babyName: '', nameField: '', inviteField: '', sheet: false, shiftOpen: false, toast: null,
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
+      notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
     })
+  }
+
+  // ── notifications (per-user prefs; the push subscription is per-device) ────
+  nPrefs() {
+    return {
+      handoff: true, partner: false, feed: false, feedEvery: null, onDutyOnly: true,
+      wake: false, meds: false, medsTime: '09:00',
+      quiet: false, quietStart: '22:00', quietEnd: '07:00', tz: null,
+      ...(this.state.notifyPrefs || {}),
+    }
+  }
+  setNotify = patch => this.setState({
+    // always ride the device's timezone along so quiet hours + meds time are local
+    notifyPrefs: { ...this.nPrefs(), ...patch, tz: deviceTz() || this.nPrefs().tz },
+    notifyPrefsDirty: true,
+  }, () => this.flushSoon())
+  // a subscription surviving in the browser re-attaches to whoever is logged in now
+  refreshPush = async () => {
+    try {
+      const sub = await pushSubscription()
+      if (sub && getToken()) {
+        await api.pushSubscribe({ endpoint: sub.endpoint, keys: sub.toJSON().keys, tz: deviceTz() })
+        this.setState({ pushOn: true })
+      } else this.setState({ pushOn: false })
+    } catch { /* offline — the toggle still reflects the browser's side */ }
+  }
+  togglePush = async () => {
+    if (this.state.pushBusy) return
+    this.setState({ pushBusy: true })
+    try {
+      if (this.state.pushOn) {
+        const sub = await pushSubscription()
+        if (sub) {
+          try { await api.pushUnsubscribe(sub.endpoint) } catch { /* row prunes itself on next push */ }
+          await sub.unsubscribe()
+        }
+        this.setState({ pushOn: false, toast: 'Notifications off for this phone', lastAdded: null })
+      } else {
+        const sub = await subscribePush(this.state.vapidKey)
+        await api.pushSubscribe({ endpoint: sub.endpoint, keys: sub.toJSON().keys, tz: deviceTz() })
+        this.setState({ pushOn: true, toast: 'This phone will get pings', lastAdded: null })
+        this.setNotify({}) // stamp the device tz into prefs right away
+      }
+    } catch (e) {
+      this.setState({
+        toast: e && e.message === 'denied'
+          ? 'Notifications are blocked — allow them in your browser settings'
+          : 'Couldn’t turn notifications on — try again',
+        lastAdded: null,
+      })
+    }
+    this.setState({ pushBusy: false })
+    this.bumpToast()
   }
 
   // ── entry helpers (views always work on live = non-deleted entries) ────────
@@ -869,6 +938,43 @@ export default class App extends React.Component {
       } : null,
       birthdate: s.babyBirthdate || '', setBirthdate: this.setBirthdate,
       ageLine: s.babyBirthdate ? ageI.label + ' old' : 'Set it and the log thinks in their weeks — insights compare against their age.',
+      notify: (() => {
+        const np = this.nPrefs()
+        const row = (key, label, icon, color) => ({
+          key, label, icon, color, on: !!np[key],
+          toggleIcon: np[key] ? 'toggle_on' : 'toggle_off', toggleColor: np[key] ? '#7C8C5A' : '#CFC7B4',
+          onToggle: () => this.setNotify({ [key]: !np[key] }),
+        })
+        return {
+          supported: pushSupported(),
+          pushOn: s.pushOn,
+          togglePush: this.togglePush,
+          pushHint: !pushSupported()
+            ? 'This browser can’t do push — on iPhone, add Baby Log to the Home Screen first, then look here again.'
+            : s.pushOn ? 'This phone gets pings. Pick what’s worth one below — each grown-up sets their own.'
+            : 'Flip it on and allow the permission — then pick what’s worth a ping.',
+          rows: [
+            row('handoff', 'Handoff asks & handbacks', 'swap_horiz', '#7C8C5A'),
+            ...(partner ? [row('partner', partnerName + ' logs something', 'edit_note', 'oklch(0.60 0.075 300)')] : []),
+            row('feed', 'Feed reminder', 'local_drink', 'oklch(0.60 0.075 250)'),
+            ...(this.trackOn('sleep') ? [row('wake', 'Wake window watch', 'wb_twilight', 'oklch(0.60 0.075 25)')] : []),
+            ...(this.trackOn('meds') ? [row('meds', 'Daily meds nudge', 'medication', 'oklch(0.60 0.075 150)')] : []),
+            row('quiet', 'Quiet hours', 'do_not_disturb_on', 'oklch(0.60 0.075 210)'),
+          ],
+          feedOn: np.feed,
+          feedChips: [[null, 'Rhythm'], [120, '2h'], [150, '2½h'], [180, '3h'], [210, '3½h'], [240, '4h']
+          ].map(([v2, label]) => ({ label, onTap: () => this.setNotify({ feedEvery: v2 }), ...this.chip(np.feedEvery === v2, OLIVE) })),
+          onDutyOnly: np.onDutyOnly,
+          onDutyToggleIcon: np.onDutyOnly ? 'toggle_on' : 'toggle_off',
+          onDutyToggleColor: np.onDutyOnly ? '#7C8C5A' : '#CFC7B4',
+          toggleOnDuty: () => this.setNotify({ onDutyOnly: !np.onDutyOnly }),
+          medsOn: np.meds, medsTime: np.medsTime,
+          setMedsTime: e => e.target.value && this.setNotify({ medsTime: e.target.value }),
+          quietOn: np.quiet, quietStart: np.quietStart, quietEnd: np.quietEnd,
+          setQuietStart: e => e.target.value && this.setNotify({ quietStart: e.target.value }),
+          setQuietEnd: e => e.target.value && this.setNotify({ quietEnd: e.target.value }),
+        }
+      })(),
       trackRows: TRACKS.map(tr => {
         const on = this.trackOn(tr.key), tt = T(tr.types[0])
         return { label: tr.label, icon: tt.icon, color: tt.color,
@@ -1305,6 +1411,59 @@ export default class App extends React.Component {
                   </div>
                 ))}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Feeds are always on. Turning something off hides it for both of you — old entries stay, and it all comes back if you switch it on again.</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Notifications</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: '#7C8C5A' }}>notifications_active</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Push to this phone</div>
+                  {v.notify.supported && (
+                    <button type="button" onClick={v.notify.togglePush} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                      <Sym style={{ fontSize: 22, color: v.notify.pushOn ? '#7C8C5A' : '#CFC7B4' }}>{v.notify.pushOn ? 'toggle_on' : 'toggle_off'}</Sym>
+                    </button>
+                  )}
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding:2px 0 4px;text-wrap:pretty')}>{v.notify.pushHint}</div>
+                {v.notify.rows.map(r => (
+                  <React.Fragment key={r.key}>
+                    <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: r.color }}>{r.icon}</Sym>
+                      <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{r.label}</div>
+                      {r.key === 'meds' && v.notify.medsOn && (
+                        <input type="time" value={v.notify.medsTime} onChange={v.notify.setMedsTime} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:7px 9px;font-size:13px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                      )}
+                      <button type="button" onClick={r.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                        <Sym style={{ fontSize: 22, color: r.toggleColor }}>{r.toggleIcon}</Sym>
+                      </button>
+                    </div>
+                    {r.key === 'feed' && v.notify.feedOn && (
+                      <>
+                        <div style={S('display:flex;align-items:center;gap:7px;padding:2px 0 8px 29px;overflow:auto')}>
+                          <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0")}>Every</div>
+                          {v.notify.feedChips.map((c, i) => (
+                            <button key={i} type="button" onClick={c.onTap} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:6px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                          ))}
+                        </div>
+                        <div style={S('display:flex;align-items:center;gap:11px;padding:0 0 8px 29px')}>
+                          <div style={S('flex:1;font-size:13px;color:#6E6659')}>Only while I’m on duty</div>
+                          <button type="button" onClick={v.notify.toggleOnDuty} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                            <Sym style={{ fontSize: 20, color: v.notify.onDutyToggleColor }}>{v.notify.onDutyToggleIcon}</Sym>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {r.key === 'quiet' && v.notify.quietOn && (
+                      <div style={S('display:flex;align-items:center;gap:8px;padding:2px 0 8px 29px')}>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>From</div>
+                        <input type="time" value={v.notify.quietStart} onChange={v.notify.setQuietStart} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:7px 9px;font-size:13px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>to</div>
+                        <input type="time" value={v.notify.quietEnd} onChange={v.notify.setQuietEnd} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:7px 9px;font-size:13px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Quiet hours pause reminders and activity pings — handoff asks always come through. Reminders reach every phone you’ve switched on.</div>
               </div>
 
               {v.invitePending && (

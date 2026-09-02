@@ -22,4 +22,16 @@ return [
 
     'max_household_users' => 2,
 
+    /*
+    |--------------------------------------------------------------------------
+    | Web Push (VAPID)
+    |--------------------------------------------------------------------------
+    | Left unset, a keypair is generated once into the database (zero config
+    | for self-hosters, survives in the /data backup). Set both to pin your
+    | own keys — e.g. shared across instances behind one hosted origin.
+    */
+
+    'vapid_public' => env('VAPID_PUBLIC_KEY'),
+    'vapid_private' => env('VAPID_PRIVATE_KEY'),
+
 ];

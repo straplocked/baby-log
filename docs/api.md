@@ -27,7 +27,10 @@ Revokes the current token.
 The single polling/converge endpoint.
 ```json
 {
-  "user":    { "id": 1, "name": "Ben", "householdId": 1 },
+  "user":    { "id": 1, "name": "Ben", "householdId": 1,
+               "notifyPrefs": { "handoff": true, "partner": false, "feed": false, "feedEvery": null,
+                                "onDutyOnly": true, "wake": false, "meds": false, "medsTime": "09:00",
+                                "quiet": false, "quietStart": "22:00", "quietEnd": "07:00", "tz": null } },
   "partner": { "id": 2, "name": "Katrina" },        // or null
   "invitePending": "katrina@example.com",            // or null
   "baby":    { "name": "Wren", "age": "2–8 wks", "birthdate": "2026-07-20" },  // or null; birthdate null until set
@@ -39,7 +42,8 @@ The single polling/converge endpoint.
                "handback_note": "…" },               // latest row, or null
   "entries": [ { "id": "uuid", "user_id": 1, "type": "bottle", "t": 1750000000000,
                  "detail": "4", "deleted": false, "rev": 1750000000123 } ],
-  "serverTime": 1750000000456
+  "serverTime": 1750000000456,
+  "vapidPublicKey": "BM…"                            // Web Push application server key
 }
 ```
 `entries` contains only rows with `rev > since` (≤ 2000, ordered by rev). Clients store `serverTime` as the next `since`.
@@ -65,6 +69,22 @@ Batch upsert from the client outbox (≤ 500 per call).
 { "tracking": { "diapers": false }, "dismissed": ["meds"] }
 ```
 Household-level preferences, shared by both parents; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
+
+## Push notifications — all auth + throttle 120/min
+
+### `POST /push/subscribe`
+```json
+{ "endpoint": "https://fcm.googleapis.com/…", "keys": { "p256dh": "…", "auth": "…" }, "tz": "America/New_York" }
+```
+Registers this device for Web Push. Upserts by `endpoint` — re-subscribing (or the partner logging in on the same phone) moves the device to the current user. Device-scoped, so no `HouseholdTouched` poke. `tz` is an IANA zone (`timezone:all` validated).
+
+### `POST /push/unsubscribe`
+`{ endpoint }` — removes the caller's row for that endpoint (other users' rows are untouched). Expired endpoints also self-prune when a push bounces 404/410.
+
+### `POST /notify-prefs`
+Any subset of the `notifyPrefs` keys shown in `/state`; provided keys merge over stored ones. `feedEvery` ∈ `null|120|150|180|210|240` (minutes; null = learned household rhythm), times are `HH:MM`. Per-user (each parent has their own), rides `/state`, pokes so the caller's other devices converge. Returns `{ ok, prefs }`.
+
+**What gets sent** (see [architecture.md](architecture.md#notifications)): handoff request/accept/handback pushes fire inline from the shift endpoints (respecting the recipient's `handoff` pref, ignoring quiet hours); partner-activity pushes fire from `POST /entries` (opt-in, throttled to one per 10 min); feed-gap, wake-window, and daily-meds reminders are sent by `babylog:reminders`, scheduled every minute.
 
 ## Shifts — all auth + throttle 120/min
 

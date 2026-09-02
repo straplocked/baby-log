@@ -37,6 +37,38 @@ The design brief: "Entries write locally first and sync when there's signal, so 
 - Broadcasts are **best-effort** (`HouseholdTouched::send()` swallows transport errors): a Reverb outage degrades to polling, never fails a write.
 - Fallbacks: 60s heartbeat poll, plus resync on window focus, `online`, and socket reconnect.
 
+## Notifications
+
+Web Push (VAPID), self-hosting-friendly: no FCM/APNs account, just the public
+HTTPS origin the app already needs.
+
+- **Keys are zero-config**: a VAPID keypair is generated once into SQLite
+  (`vapid_keys`) on first use, so it lives inside the one backup-able file;
+  `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` env vars override it. The public key
+  rides `/state`.
+- **Subscription is per-device** (`push_subscriptions`, upserted by endpoint);
+  **prefs are per-user** (`users.notify_prefs`, edited in History →
+  Notifications, synced through `/state` like everything else). Expired
+  endpoints self-prune when a push bounces.
+- **Event pushes** fire inline from write endpoints: shift request / accept /
+  handback (on by default — a partner asking you to take over should reach a
+  sleeping phone, so these ignore quiet hours) and opt-in partner activity
+  ("Katrina logged a bottle", throttled to one per 10 min so backfill bursts
+  don't rattle anyone).
+- **Reminder pushes** come from `babylog:reminders`, run every minute by a
+  `schedule:work` process the api container starts next to `artisan serve`:
+  feed gap (learned cluster-aware rhythm or a fixed interval, optionally only
+  while on duty), wake window (age-typical max from the baby's birth date),
+  and a daily meds nudge. Each fires at most once per triggering feed / nap /
+  day — the dedupe lives in `users.notify_state`, so restarts can't
+  double-ping.
+- **Delivery is best-effort** like the Reverb pokes ([app/Services/PushService.php](../api/app/Services/PushService.php)):
+  a dead push service never fails a write or a scheduler tick. Pushes carry
+  only `{title, body, tag}` — never entry data; the app still converges
+  through normal sync.
+- Quiet hours and meds times are evaluated in the user's own IANA timezone,
+  stamped from the device whenever prefs are saved.
+
 ## Backend (`api/`)
 
 Laravel 13, SQLite, Sanctum bearer tokens.

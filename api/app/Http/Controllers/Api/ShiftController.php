@@ -4,11 +4,24 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Services\PushService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ShiftController extends Controller
 {
+    /**
+     * Handoff pushes deliberately ignore quiet hours — this is one parent
+     * addressing the other directly, not the app nagging.
+     */
+    private function pushHandoff(?User $to, string $title, string $body): void
+    {
+        if ($to && $to->notifyPrefs()['handoff']) {
+            app(PushService::class)->notify($to, 'shift', $title, $body);
+        }
+    }
+
     /** On-duty parent asks the partner to take over ("Hand off"). */
     public function request(Request $request): JsonResponse
     {
@@ -23,6 +36,11 @@ class ShiftController extends Controller
                 'note' => $data['note'] ?? null,
                 'requested_at' => now()->getTimestampMs(),
             ]);
+            $this->pushHandoff(
+                $household->partnerOf($request->user()),
+                $request->user()->name.' is asking you to take over',
+                ($data['note'] ?? null) ?: 'Open Baby Log to see the handoff.',
+            );
         }
 
         HouseholdTouched::send($household->id, 'shift');
@@ -59,6 +77,12 @@ class ShiftController extends Controller
         $household->update(['on_duty_user_id' => $user->id]);
 
         HouseholdTouched::send($household->id, 'shift');
+        $until = ($data['until'] ?? null) ?: null;
+        $this->pushHandoff(
+            $household->partnerOf($user),
+            $user->name.' took over — you’re covered',
+            $until ? 'On duty '.lcfirst($until).'.' : 'Get some rest.',
+        );
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }
@@ -103,6 +127,11 @@ class ShiftController extends Controller
         $household->update(['on_duty_user_id' => $partner?->id ?? $user->id]);
 
         HouseholdTouched::send($household->id, 'shift');
+        $this->pushHandoff(
+            $partner,
+            $user->name.' handed '.($household->baby?->name ?? 'the baby').' back',
+            ($data['note'] ?? null) ?: 'Their shift report is waiting in the app.',
+        );
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }

@@ -19,7 +19,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 - The **incoming-request card** shows the *predicted* plan chips (computed from rhythm), while the accept sheet lets you toggle items — subtle mismatch if you toggle before accepting.
 - **"Until" is decorative** — "Until 6 AM" doesn't trigger anything at 6 AM.
-- **No notifications**: a handoff request only appears when the partner's app is open (realtime) or next opened. Web Push would make requests/handbacks actually reach a sleeping partner's phone. Probably the highest-value addition.
+- ~~**No notifications**~~ Fixed 2026-09-02: Web Push with per-parent prefs (History → Notifications) — handoff asks/handbacks, opt-in partner activity, feed-gap/wake-window/daily-meds reminders, quiet hours. Remaining edges: iOS needs the app installed to the Home Screen before push is offered; notifications deep-link to the app root (no per-kind screen); reminder copy is English-only like the rest of the app.
 - Plan items added mid-shift sync, but the partner has no read-only view of the active shift's progress.
 
 ## Technical debt / release gates

@@ -1,0 +1,76 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Events\HouseholdTouched;
+use App\Http\Controllers\Controller;
+use App\Models\PushSubscription;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class PushController extends Controller
+{
+    /**
+     * Register this device for Web Push. Device-scoped, not household state —
+     * nothing the partner renders changes, so no HouseholdTouched poke.
+     */
+    public function subscribe(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'endpoint' => ['required', 'url', 'max:500'],
+            'keys.p256dh' => ['required', 'string', 'max:255'],
+            'keys.auth' => ['required', 'string', 'max:255'],
+            'tz' => ['nullable', 'timezone:all'],
+        ]);
+
+        // the endpoint identifies the device — re-subscribing (or a partner
+        // logging in on the same phone) moves it to the current user
+        PushSubscription::updateOrCreate(
+            ['endpoint' => $data['endpoint']],
+            [
+                'user_id' => $request->user()->id,
+                'p256dh' => $data['keys']['p256dh'],
+                'auth' => $data['keys']['auth'],
+                'timezone' => $data['tz'] ?? null,
+            ],
+        );
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function unsubscribe(Request $request): JsonResponse
+    {
+        $data = $request->validate(['endpoint' => ['required', 'string', 'max:500']]);
+
+        $request->user()->pushSubscriptions()->where('endpoint', $data['endpoint'])->delete();
+
+        return response()->json(['ok' => true]);
+    }
+
+    /** Per-parent notification choices. Last write wins, merged over what's stored. */
+    public function prefs(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'handoff' => ['sometimes', 'boolean'],
+            'partner' => ['sometimes', 'boolean'],
+            'feed' => ['sometimes', 'boolean'],
+            'feedEvery' => ['sometimes', 'nullable', 'integer', 'in:120,150,180,210,240'],
+            'onDutyOnly' => ['sometimes', 'boolean'],
+            'wake' => ['sometimes', 'boolean'],
+            'meds' => ['sometimes', 'boolean'],
+            'medsTime' => ['sometimes', 'date_format:H:i'],
+            'quiet' => ['sometimes', 'boolean'],
+            'quietStart' => ['sometimes', 'date_format:H:i'],
+            'quietEnd' => ['sometimes', 'date_format:H:i'],
+            'tz' => ['sometimes', 'nullable', 'timezone:all'],
+        ]);
+
+        $user = $request->user();
+        $user->update(['notify_prefs' => array_merge($user->notify_prefs ?? [], $data)]);
+
+        // prefs are per-user but ride /state — poke so my *other* devices converge
+        HouseholdTouched::send($user->household_id, 'notify');
+
+        return response()->json(['ok' => true, 'prefs' => $user->notifyPrefs()]);
+    }
+}

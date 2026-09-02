@@ -8,16 +8,36 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'household_id'])]
-#[Hidden(['password', 'remember_token'])]
+#[Fillable(['name', 'email', 'password', 'household_id', 'notify_prefs', 'notify_state'])]
+#[Hidden(['password', 'remember_token', 'notify_state'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * Per-parent notification defaults. Handoffs are the one thing on out of
+     * the box — a partner asking you to take over should actually reach you.
+     */
+    public const NOTIFY_DEFAULTS = [
+        'handoff' => true,      // shift request / accept / handback
+        'partner' => false,     // "your partner logged something"
+        'feed' => false,        // feed-gap reminder
+        'feedEvery' => null,    // minutes between feeds; null = learned household rhythm
+        'onDutyOnly' => true,   // feed reminders only while I'm on duty
+        'wake' => false,        // awake past the age-typical wake window
+        'meds' => false,        // daily meds reminder
+        'medsTime' => '09:00',
+        'quiet' => false,       // quiet hours silence reminders; handoffs still deliver
+        'quietStart' => '22:00',
+        'quietEnd' => '07:00',
+        'tz' => null,           // IANA zone from the device, for quiet hours + meds time
+    ];
 
     /**
      * Get the attributes that should be cast.
@@ -29,11 +49,49 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'notify_prefs' => 'array',
+            'notify_state' => 'array',
         ];
     }
 
     public function household(): BelongsTo
     {
         return $this->belongsTo(Household::class);
+    }
+
+    public function pushSubscriptions(): HasMany
+    {
+        return $this->hasMany(PushSubscription::class);
+    }
+
+    /** Stored prefs over defaults — always a complete set of keys. */
+    public function notifyPrefs(): array
+    {
+        return array_merge(self::NOTIFY_DEFAULTS, $this->notify_prefs ?? []);
+    }
+
+    /** True while this user's quiet-hours window (in their own timezone) is active. */
+    public function inQuietHours(): bool
+    {
+        $p = $this->notifyPrefs();
+        if (! $p['quiet']) {
+            return false;
+        }
+        try {
+            $now = now($p['tz'] ?: config('app.timezone'));
+        } catch (\Throwable) {
+            $now = now();
+        }
+        $mins = $now->hour * 60 + $now->minute;
+        $toMins = function (string $hm): int {
+            [$h, $m] = explode(':', $hm);
+
+            return (int) $h * 60 + (int) $m;
+        };
+        $start = $toMins($p['quietStart']);
+        $end = $toMins($p['quietEnd']);
+
+        // a window like 22:00–07:00 wraps midnight
+        return $start <= $end ? ($mins >= $start && $mins < $end) : ($mins >= $start || $mins < $end);
     }
 }

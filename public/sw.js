@@ -14,6 +14,26 @@ self.addEventListener('activate', e => {
   )
 })
 
+// Web Push from the api container — payload is {title, body, tag}
+self.addEventListener('push', e => {
+  let d = {}
+  try { d = e.data ? e.data.json() : {} } catch { /* non-JSON push — show the shell */ }
+  e.waitUntil(self.registration.showNotification(d.title || 'Baby Log', {
+    body: d.body || '',
+    tag: d.tag || 'babylog', // same-kind pushes replace, they don't stack
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+  }))
+})
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close()
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(list => list.length ? list[0].focus() : self.clients.openWindow('/'))
+  )
+})
+
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return
   const url = new URL(e.request.url)

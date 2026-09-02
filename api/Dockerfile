@@ -6,7 +6,10 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev
 
 FROM php:8.4-cli-alpine
-RUN docker-php-ext-install pcntl
+# gmp speeds up the Web Push EC crypto (pure-PHP fallback works but is slow)
+RUN apk add --no-cache gmp gmp-dev \
+    && docker-php-ext-install pcntl gmp bcmath \
+    && apk del gmp-dev
 WORKDIR /var/www/html
 COPY --from=deps /app /var/www/html
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
