@@ -1,6 +1,8 @@
 import React from 'react'
 import { S } from './s'
 import Duck from './Duck'
+import { api, getToken, setToken } from './api'
+import { startEcho, stopEcho, isEchoConnected } from './echo'
 
 // ── domain constants (from design/Baby Log.dc.html) ──────────────────────────
 const TYPES = [
@@ -19,15 +21,20 @@ const FEEDS = ['bottle', 'nurse']
 const DIAPERS = ['wet', 'dirty', 'both']
 const OLIVE = '#7C8C5A'
 const DAY = 86400000
+const ME_COLOR = '#7A93B5'
+const PARTNER_COLOR = '#7C8C5A'
 
-// ── local-first persistence ──────────────────────────────────────────────────
-const STORE_KEY = 'babylog:v1'
-const PERSIST = ['entries', 'screen', 'authMode', 'babyName', 'nameField', 'inviteField', 'age',
-  'shift', 'shiftStart', 'shiftEnd', 'plan', 'planOff', 'until', 'handbackNote', 'requestAt']
+// ── local-first persistence (per-device cache; server is the shared log) ─────
+const STORE_KEY = 'babylog:v2'
+const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
+  'me', 'partner', 'invitePending', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
+  'outbox', 'lastSync', 'plan', 'until', 'handbackNote']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
 }
+const numify = d => (typeof d === 'string' && /^\d+(\.\d+)?$/.test(d)) ? Number(d) : d
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'e' + Date.now() + Math.random().toString(36).slice(2, 9))
 
 const Sym = ({ style, children }) => (
   <span style={{ fontFamily: "'Material Symbols Rounded'", lineHeight: 1, ...style }}>{children}</span>
@@ -37,52 +44,180 @@ export default class App extends React.Component {
   constructor(props) {
     super(props)
     this.state = {
-      screen: 'splash', authMode: 'signup', entries: this.seed(), tick: 0,
+      screen: 'splash', authMode: 'signup', tick: 0,
+      authName: '', authEmail: '', authPassword: '', authError: null, authBusy: false,
+      entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, detail: null, editId: null,
-      toast: null, lastAdded: null, handoff: false,
-      babyName: 'Wren', nameField: 'Wren', inviteField: '', age: '11 weeks',
-      shift: 'incoming', shiftOpen: false, shiftStart: null, shiftEnd: null, requestAt: Date.now() - 9 * 60000,
-      planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
+      toast: null, lastAdded: null,
+      babyName: '', nameField: '', inviteField: '', age: '2–8 wks',
+      me: null, partner: null, invitePending: null,
+      onDutyUserId: null, serverShift: null, dismissedShiftId: null,
+      outbox: [], lastSync: 0, offline: false,
+      shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
     }
     const saved = loadSaved()
     if (saved) for (const k of PERSIST) if (k in saved) this.state[k] = saved[k]
+    // no token → cached signed-in screens are stale
+    if (!getToken() && !['splash', 'auth'].includes(this.state.screen)) this.state.screen = 'splash'
   }
 
-  seed() {
-    const now = Date.now()
-    const out = []
-    let i = 0
-    const push = (type, t, detail) => { if (t <= now) out.push({ id: 's' + (++i), type, t, detail: detail ?? null }) }
-    for (let d = 0; d < 7; d++) {
-      const base = new Date(); base.setHours(0, 0, 0, 0)
-      const day = base.getTime() - d * DAY
-      const jit = h => day + h * 3600000 + ((i * 37 + d * 53) % 26) * 60000
-      const skipF = [[], [3], [1, 6], [], [4], [2, 5], [0]][d]
-      const skipD = [[2], [], [5], [1, 4], [], [3], [0, 6]][d]
-      ;[1.6, 4.5, 7.4, 10.3, 13.1, 16.2, 19.1, 22.2].forEach((h, k) => {
-        if (skipF.includes(k)) return
-        const bottle = (k + d) % 3 !== 0
-        push(bottle ? 'bottle' : 'nurse', jit(h), bottle ? [3, 4, 4, 5][(k + d) % 4] : (k % 2 ? 'Left' : 'Right'))
-      })
-      ;[2.7, 5.6, 8.4, 11.5, 14.3, 17.4, 20.6, 23.2].forEach((h, k) => {
-        if (skipD.includes(k)) return
-        push((k + d) % 4 === 1 ? 'dirty' : (k + d) % 7 === 3 ? 'both' : 'wet', jit(h))
-      })
-      push('sleep', jit(2.9), [150, 95, 45][(d) % 3])
-      push('sleep', jit(13.6), [45, 70, 30][(d + 1) % 3])
-      if (d % 2 === 1) push('bath', jit(18.4))
-      push('meds', jit(9.2))
-    }
-    return out.sort((a, b) => b.t - a.t)
+  componentDidMount() {
+    this._iv = setInterval(() => {
+      this.setState(s => ({ tick: s.tick + 1 }))
+      // realtime pokes carry the load; poll only as fallback / slow heartbeat
+      if (!isEchoConnected() || this.state.tick % 3 === 0) this.sync()
+    }, 20000)
+    this._wake = () => this.sync()
+    window.addEventListener('focus', this._wake)
+    window.addEventListener('online', this._wake)
+    document.addEventListener('visibilitychange', this._wake)
+    if (getToken()) this.sync()
+  }
+  componentWillUnmount() {
+    clearInterval(this._iv); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
+    window.removeEventListener('focus', this._wake)
+    window.removeEventListener('online', this._wake)
+    document.removeEventListener('visibilitychange', this._wake)
+    stopEcho()
   }
 
-  componentDidMount() { this._iv = setInterval(() => this.setState(s => ({ tick: s.tick + 1 })), 20000) }
-  componentWillUnmount() { clearInterval(this._iv); if (this._to) clearTimeout(this._to) }
+  ensureEcho() {
+    const hh = this.state.me?.householdId
+    const token = getToken()
+    if (!hh || !token) return
+    const sig = token + ':' + hh
+    if (this._echoSig === sig) return
+    this._echoSig = sig
+    startEcho(token, hh, { onPoke: () => this.sync(), onConnect: () => this.sync() })
+  }
   componentDidUpdate() {
     const out = {}
     for (const k of PERSIST) out[k] = this.state[k]
     try { localStorage.setItem(STORE_KEY, JSON.stringify(out)) } catch { /* storage full/blocked — stay in-memory */ }
   }
+
+  // ── sync ───────────────────────────────────────────────────────────────────
+  flushSoon() {
+    if (this._flushTo) clearTimeout(this._flushTo)
+    this._flushTo = setTimeout(() => this.sync(), 250)
+  }
+
+  sync = async () => {
+    if (!getToken() || this._syncing) return
+    this._syncing = true
+    try {
+      if (this.state.outbox.length) {
+        const ids = new Set(this.state.outbox)
+        const payload = this.state.entries.filter(e => ids.has(e.id))
+          .map(e => ({ id: e.id, type: e.type, t: e.t, detail: e.detail == null ? null : String(e.detail), deleted: !!e.deleted }))
+        if (payload.length) await api.pushEntries(payload)
+        this.setState(s => ({ outbox: s.outbox.filter(id => !ids.has(id)) }))
+      }
+      const st = await api.state(this.state.lastSync)
+      this.applyState(st)
+      if (this.state.offline) this.setState({ offline: false })
+    } catch (e) {
+      if (e.status === 401) this.doLogout(false)
+      else this.setState({ offline: true }) // no signal — local writes are queued
+    } finally {
+      this._syncing = false
+    }
+  }
+
+  applyState(st) {
+    this.setState(s => {
+      const outbox = new Set(s.outbox)
+      const map = new Map(s.entries.map(e => [e.id, e]))
+      for (const e of (st.entries || [])) {
+        if (outbox.has(e.id)) continue // our unpushed write wins for now
+        map.set(e.id, { id: e.id, type: e.type, t: e.t, detail: numify(e.detail), deleted: !!e.deleted, by: e.user_id })
+      }
+      const next = {
+        entries: [...map.values()].sort((a, b) => b.t - a.t),
+        me: st.user, partner: st.partner, invitePending: st.invitePending,
+        onDutyUserId: st.onDutyUserId, serverShift: st.shift,
+        lastSync: st.serverTime,
+      }
+      if (st.baby) { next.babyName = st.baby.name; if (st.baby.age) next.age = st.baby.age }
+      // my active shift plan lives on the server copy
+      if (st.shift && st.shift.state === 'active' && st.user && st.shift.user_id === st.user.id) next.plan = st.shift.plan || []
+      return next
+    }, () => {
+      this.ensureEcho()
+      // partner just handed back to me → surface the shift report once
+      const { serverShift: sh, me, shiftOpen, dismissedShiftId, screen } = this.state
+      if (sh && sh.state === 'completed' && me && sh.user_id !== me.id && sh.id !== dismissedShiftId
+        && !shiftOpen && this._autoOpened !== sh.id && screen === 'home') {
+        this._autoOpened = sh.id
+        this.setState({ shiftOpen: true })
+      }
+    })
+  }
+
+  // ── auth / onboarding ──────────────────────────────────────────────────────
+  authSubmit = async () => {
+    const s = this.state
+    if (s.authBusy) return
+    this.setState({ authBusy: true, authError: null })
+    try {
+      if (s.authMode === 'signup') {
+        const r = await api.register({ name: s.authName.trim() || 'Parent', email: s.authEmail.trim(), password: s.authPassword })
+        setToken(r.token)
+      } else {
+        const r = await api.login({ email: s.authEmail.trim(), password: s.authPassword })
+        setToken(r.token)
+      }
+      const st = await api.state(0)
+      this.setState({ entries: [], outbox: [], lastSync: 0, dismissedShiftId: null, authBusy: false, authPassword: '' })
+      this.applyState(st)
+      this.setState({ screen: st.baby ? 'home' : 'onboard', nameField: st.baby ? st.baby.name : '' })
+    } catch (e) {
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({ authBusy: false, authError: first || e.message || 'Something went wrong — try again.' })
+    }
+  }
+
+  finishOnboard = async () => {
+    const name = (this.state.nameField || '').trim() || 'Baby'
+    const age = this.state.age
+    this.setState({ screen: 'home', babyName: name })
+    try {
+      await api.setBaby({ name, age })
+      if (this.state.inviteField.trim()) await this.sendInvite()
+    } catch { this.setState({ offline: true }) }
+  }
+
+  sendInvite = async () => {
+    const email = this.state.inviteField.trim()
+    if (!email) return
+    try {
+      await api.invite(email)
+      this.setState({ invitePending: email, toast: 'Invited ' + email + ' — they’ll land in this log', lastAdded: null })
+      this.bumpToast()
+    } catch (e) {
+      this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', lastAdded: null })
+      this.bumpToast()
+    }
+  }
+
+  doLogout = async (callApi = true) => {
+    if (callApi) { try { await api.logout() } catch { /* token dies anyway */ } }
+    setToken(null)
+    stopEcho()
+    this._echoSig = null
+    try { localStorage.removeItem(STORE_KEY) } catch { /* ignore */ }
+    this._autoOpened = null
+    this.setState({
+      screen: 'splash', authMode: 'signup', authName: '', authEmail: '', authPassword: '', authError: null,
+      entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null,
+      onDutyUserId: null, serverShift: null, dismissedShiftId: null,
+      babyName: '', nameField: '', inviteField: '', sheet: false, shiftOpen: false, toast: null,
+      plan: [], planDraft: null, planOff: [], handbackNote: '',
+    })
+  }
+
+  // ── entry helpers (views always work on live = non-deleted entries) ────────
+  live() { return this.state.entries.filter(e => !e.deleted) }
 
   clock(t) {
     const d = new Date(t)
@@ -115,7 +250,7 @@ export default class App extends React.Component {
     return p.filter(Boolean).join(' · ') || 'logged'
   }
   feedGap() {
-    const t = this.state.entries.filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b).slice(-14)
+    const t = this.live().filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b).slice(-14)
     const gaps = []; for (let i = 1; i < t.length; i++) gaps.push(t[i] - t[i - 1])
     return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 3 * 3600000
   }
@@ -127,22 +262,61 @@ export default class App extends React.Component {
     if (meds.getTime() - now < 11 * 3600000) out.push({ id: 'p3', type: 'meds', at: meds.getTime() })
     return out
   }
-  openShift = () => this.setState(s => ({ shiftOpen: true, planDraft: s.planDraft || this.draftPlan() }))
-  closeShift = () => this.setState(s => ({ shiftOpen: false, shift: s.shift === 'report' ? 'theirs' : s.shift }))
-  acceptShift = () => this.setState(s => {
-    const draft = (s.planDraft || this.draftPlan()).filter(p => !s.planOff.includes(p.id))
-    return { shift: 'mine', shiftOpen: false, shiftStart: Date.now(), shiftEnd: null, handbackNote: '', plan: draft, planDraft: null, planOff: [], toast: 'You’re on duty · Katrina notified', lastAdded: null }
-  }, () => this.bumpToast())
+  lastOf(keys) { return this.live().filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
+
+  // ── shifts (server-backed) ─────────────────────────────────────────────────
+  openShift = () => {
+    if (!this.state.partner) return // no one to hand to yet
+    this.setState(s => ({ shiftOpen: true, planDraft: s.planDraft || this.draftPlan() }))
+  }
+  closeShift = () => this.setState(s => ({
+    shiftOpen: false,
+    dismissedShiftId: (s.serverShift && s.serverShift.state === 'completed') ? s.serverShift.id : s.dismissedShiftId,
+  }))
+  acceptShift = () => {
+    const s = this.state
+    const plan = (s.planDraft || this.draftPlan()).filter(p => !s.planOff.includes(p.id))
+    const until = s.until
+    this.setState(st => ({
+      shiftOpen: false, shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
+      onDutyUserId: st.me?.id ?? st.onDutyUserId,
+      serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, started_at: Date.now() },
+      toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', lastAdded: null,
+    }), () => this.bumpToast())
+    api.shiftAccept(plan, until).then(r => this.setState({ serverShift: r.shift })).catch(() => this.setState({ offline: true }))
+  }
   addPlanFeed = () => this.setState(s => {
     const last = s.plan.filter(p => FEEDS.includes(p.type)).sort((a, b) => b.at - a.at)[0]
-    return { plan: [...s.plan, { id: 'p' + Date.now(), type: 'bottle', at: (last ? last.at : Date.now()) + this.feedGap() }] }
-  })
-  handBack = () => this.setState({ shift: 'report', shiftEnd: Date.now(), plan: [] })
-  lastOf(keys) { return this.state.entries.filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
+    const plan = [...s.plan, { id: 'p' + Date.now(), type: 'bottle', at: (last ? last.at : Date.now()) + this.feedGap() }]
+    return { plan, serverShift: s.serverShift ? { ...s.serverShift, plan } : s.serverShift }
+  }, () => api.shiftPlan(this.state.plan).catch(() => {}))
+  handBack = () => {
+    const note = this.state.handbackNote
+    this.setState(s => ({
+      plan: [],
+      serverShift: s.serverShift && s.serverShift.state === 'active'
+        ? { ...s.serverShift, state: 'completed', ended_at: Date.now(), handback_note: note }
+        : { id: -2, state: 'completed', user_id: s.me?.id, started_at: s.serverShift?.started_at ?? Date.now(), ended_at: Date.now(), handback_note: note },
+      onDutyUserId: s.partner?.id ?? s.onDutyUserId,
+    }))
+    api.shiftHandback(note).then(r => { if (r.shift) this.setState({ serverShift: r.shift }) }).catch(() => this.setState({ offline: true }))
+  }
+  requestHandoff = () => {
+    const note = this.state.handbackNote
+    const partner = this.state.partner
+    this.setState(s => ({
+      shiftOpen: false,
+      serverShift: { id: -3, state: 'requested', requester_id: s.me?.id, note, requested_at: Date.now() },
+      toast: (partner?.name || 'Your partner') + ' will get your handoff ask', lastAdded: null,
+    }), () => this.bumpToast())
+    api.shiftRequest(note).catch(() => this.setState({ offline: true }))
+  }
 
+  // ── quick-log sheet ────────────────────────────────────────────────────────
   predict() {
     if ((this.props.smartPrefill ?? true) === false) return null
     const feed = this.lastOf(FEEDS), dia = this.lastOf(DIAPERS)
+    if (!feed && !dia) return 'bottle'
     const fMin = feed ? (Date.now() - feed.t) / 60000 : 999
     const dMin = dia ? (Date.now() - dia.t) / 60000 : 999
     if (fMin / 165 >= dMin / 150) return feed && feed.type === 'nurse' ? 'nurse' : 'bottle'
@@ -171,10 +345,20 @@ export default class App extends React.Component {
     const t = this.stamp(), detail = this.state.detail
     if (this.state.editId) {
       const id = this.state.editId
-      this.setState(s => ({ sheet: false, entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e), toast: 'Entry updated', lastAdded: null }))
+      this.setState(s => ({
+        sheet: false,
+        entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e),
+        outbox: [...new Set([...s.outbox, id])],
+        toast: 'Entry updated', lastAdded: null,
+      }), () => this.flushSoon())
     } else {
-      const entry = { id: 'n' + Date.now(), type: key, t, detail }
-      this.setState(s => ({ sheet: false, screen: 'home', entries: [entry, ...s.entries], toast: T(key).label + ' logged · ' + this.clock(t), lastAdded: entry.id }))
+      const entry = { id: uuid(), type: key, t, detail, by: this.state.me?.id }
+      this.setState(s => ({
+        sheet: false, screen: 'home',
+        entries: [entry, ...s.entries],
+        outbox: [...s.outbox, entry.id],
+        toast: T(key).label + ' logged · ' + this.clock(t), lastAdded: entry.id,
+      }), () => this.flushSoon())
     }
     this.bumpToast()
   }
@@ -182,9 +366,16 @@ export default class App extends React.Component {
     if (this._to) clearTimeout(this._to)
     this._to = setTimeout(() => this.setState({ toast: null, lastAdded: null }), 6000)
   }
+  markDeleted(id) {
+    this.setState(s => ({
+      entries: s.entries.map(e => e.id === id ? { ...e, deleted: true } : e),
+      outbox: [...new Set([...s.outbox, id])],
+    }), () => this.flushSoon())
+  }
   undo = () => {
     const id = this.state.lastAdded
-    this.setState(s => ({ toast: null, lastAdded: null, entries: id ? s.entries.filter(e => e.id !== id) : s.entries }))
+    this.setState({ toast: null, lastAdded: null })
+    if (id) this.markDeleted(id)
   }
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
@@ -193,12 +384,9 @@ export default class App extends React.Component {
   }
   remove = () => {
     const id = this.state.editId
-    this.setState(s => ({ sheet: false, entries: s.entries.filter(e => e.id !== id), toast: 'Entry deleted', lastAdded: null }))
+    this.setState({ sheet: false, toast: 'Entry deleted', lastAdded: null })
+    if (id) this.markDeleted(id)
     this.bumpToast()
-  }
-  reset = () => {
-    try { localStorage.removeItem(STORE_KEY) } catch { /* ignore */ }
-    this.setState({ entries: this.seed(), sheet: false, toast: null, screen: 'splash', nameField: 'Wren', shift: 'incoming', shiftOpen: false, shiftStart: null, shiftEnd: null, plan: [], planDraft: null, planOff: [], handbackNote: '', requestAt: Date.now() - 9 * 60000 })
   }
 
   chip(on, tone) {
@@ -207,10 +395,11 @@ export default class App extends React.Component {
   }
   bars(keys, color) {
     const out = []
+    const live = this.live()
     const base = new Date(); base.setHours(0, 0, 0, 0)
     for (let d = 6; d >= 0; d--) {
       const from = base.getTime() - d * DAY
-      const n = this.state.entries.filter(e => keys.includes(e.type) && e.t >= from && e.t < from + DAY).length
+      const n = live.filter(e => keys.includes(e.type) && e.t >= from && e.t < from + DAY).length
       out.push({ n, day: d === 0 ? 'Today' : new Date(from).toLocaleDateString(undefined, { weekday: 'short' }) })
     }
     const max = Math.max(...out.map(o => o.n), 1)
@@ -223,9 +412,16 @@ export default class App extends React.Component {
 
   renderVals() {
     const s = this.state
+    const live = this.live()
     const st = T(s.sel || 'bottle')
     const step = Number(this.props.timeStep ?? 5) || 5
     const stampT = s.sheet ? this.stamp() : Date.now()
+
+    const me = s.me, partner = s.partner, sh = s.serverShift
+    const myName = me?.name || 'You'
+    const partnerName = partner?.name || 'your partner'
+    const initial = n => (n || '?').trim()[0]?.toUpperCase() || '?'
+    const iAmOnDuty = !me || !s.onDutyUserId || s.onDutyUserId === me.id
 
     const cards = [
       { keys: FEEDS, label: 'Fed', icon: 'local_drink', color: 'oklch(0.60 0.075 250)' },
@@ -240,11 +436,11 @@ export default class App extends React.Component {
     })
 
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0)
-    const td = s.entries.filter(e => e.t >= midnight.getTime())
+    const td = live.filter(e => e.t >= midnight.getTime())
     const oz = td.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
     const todaySummary = td.filter(e => FEEDS.includes(e.type)).length + ' feeds · ' + oz + this.unit() + ' · ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers'
 
-    const timeline = [...s.entries].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
+    const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
       time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
     }))
@@ -273,7 +469,7 @@ export default class App extends React.Component {
       { label: 'Today so far', value: td.filter(e => FEEDS.includes(e.type)).length + ' feeds / ' + td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' },
     ]
 
-    const week = s.entries.filter(e => e.t >= midnight.getTime() - 6 * DAY)
+    const week = live.filter(e => e.t >= midnight.getTime() - 6 * DAY)
     const feedsWk = week.filter(e => FEEDS.includes(e.type))
     const ozWk = week.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
     const naps = week.filter(e => e.type === 'sleep')
@@ -289,8 +485,13 @@ export default class App extends React.Component {
       { label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' },
     ]
 
-    const shiftStart = s.shiftStart || Date.now()
-    const shiftEntries = s.entries.filter(e => e.t >= shiftStart && (!s.shiftEnd || e.t <= s.shiftEnd)).sort((a, b) => a.t - b.t)
+    // shift window + plan progress
+    const activeMine = sh && sh.state === 'active' && me && sh.user_id === me.id
+    const completed = sh && sh.state === 'completed'
+    const incomingReq = !!(partner && sh && sh.state === 'requested' && sh.requester_id === partner.id)
+    const shiftStart = (activeMine || completed ? sh.started_at : null) || Date.now()
+    const shiftEnd = completed ? sh.ended_at : null
+    const shiftEntries = live.filter(e => e.t >= shiftStart && (!shiftEnd || e.t <= shiftEnd)).sort((a, b) => a.t - b.t)
     const matched = new Set()
     const plan = [...s.plan].sort((a, b) => a.at - b.at).map(p => {
       const keys = FEEDS.includes(p.type) ? FEEDS : [p.type]
@@ -317,14 +518,15 @@ export default class App extends React.Component {
     const nextRow = planRows.find(r => r.stateIcon === 'schedule')
     const draft = s.planDraft || []
     const fmtPlanLabel = p => (p.type === 'bottle' ? 'Feed' : T(p.type).label)
-    const requestPlan = this.draftPlan().slice(0, 2).map(p => ({ icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p) + ' ~' + this.clock(p.at) }))
+    const rhythm = this.draftPlan()
+    const requestPlan = rhythm.slice(0, 2).map(p => ({ icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p) + ' ~' + this.clock(p.at) }))
     const requestPlanRows = draft.map(p => {
       const off = s.planOff.includes(p.id)
       return { icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p), time: '~' + this.clock(p.at),
         toggleIcon: off ? 'toggle_off' : 'toggle_on', toggleColor: off ? '#CFC7B4' : '#7C8C5A',
         onToggle: () => this.setState(st2 => ({ planOff: off ? st2.planOff.filter(x => x !== p.id) : [...st2.planOff, p.id] })) }
     })
-    const t1 = requestPlan[0] ? this.clock(this.draftPlan()[0].at) : '', t2 = requestPlan[1] ? this.clock(this.draftPlan()[1].at) : ''
+    const t1 = this.clock(rhythm[0].at), t2 = rhythm[1] ? this.clock(rhythm[1].at) : ''
     const sf = shiftEntries.filter(e => FEEDS.includes(e.type)), sd = shiftEntries.filter(e => DIAPERS.includes(e.type)), ss = shiftEntries.filter(e => e.type === 'sleep')
     const sOz = sf.filter(e => e.type === 'bottle').reduce((a, e) => a + (Number(e.detail) || 0), 0)
     const reportRows = [
@@ -334,19 +536,28 @@ export default class App extends React.Component {
       { label: 'Sleep logged', value: ss.length ? this.dur(ss.reduce((a, e) => a + (Number(e.detail) || 0), 0)) : 'none yet' },
       { label: 'Last thing', value: shiftEntries.length ? T(shiftEntries[shiftEntries.length - 1].type).label + ' · ' + this.clock(shiftEntries[shiftEntries.length - 1].t) : '—' },
     ]
-    const reqMins = Math.round((Date.now() - s.requestAt) / 60000)
+    const reqMins = sh?.requested_at ? Math.round((Date.now() - sh.requested_at) / 60000) : 0
+
+    const showReport = s.shiftOpen && completed && sh.id !== s.dismissedShiftId
+    const iHandedBack = completed && me && sh.user_id === me.id
+    const noteShown = completed ? (sh.handback_note || s.handbackNote) : s.handbackNote
 
     return {
-      reset: this.reset, noop: () => {},
       onboarding: s.screen === 'onboard', isHome: s.screen === 'home', isHistory: s.screen === 'history',
       showTabs: s.screen === 'home' || s.screen === 'history',
       isSplash: s.screen === 'splash', isAuth: s.screen === 'auth', isLogin: s.authMode === 'login', isSignup: s.authMode === 'signup',
-      goSplash: () => this.setState({ screen: 'splash' }),
-      goLogin: () => this.setState({ screen: 'auth', authMode: 'login' }), goSignup: () => this.setState({ screen: 'auth', authMode: 'signup' }),
-      authSubmit: () => this.setState({ screen: s.authMode === 'login' ? 'home' : 'onboard' }),
+      goSplash: () => this.setState({ screen: 'splash', authError: null }),
+      goLogin: () => this.setState({ screen: 'auth', authMode: 'login', authError: null }),
+      goSignup: () => this.setState({ screen: 'auth', authMode: 'signup', authError: null }),
+      authSubmit: this.authSubmit,
       authTitle: s.authMode === 'login' ? 'Welcome back' : 'Let’s set up your log',
-      authBody: s.authMode === 'login' ? 'Your log is right where you left it — and whatever Katrina added since.' : 'One account per grown-up. You’ll invite the other one in a second.',
-      authCta: s.authMode === 'login' ? 'Log in' : 'Create account',
+      authBody: s.authMode === 'login' ? 'Your log is right where you left it — and whatever your partner added since.' : 'One account per grown-up. You’ll invite the other one in a second.',
+      authCta: s.authBusy ? 'One sec…' : (s.authMode === 'login' ? 'Log in' : 'Create account'),
+      authError: s.authError,
+      authName: s.authName, setAuthName: e => this.setState({ authName: e.target.value }),
+      authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
+      authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
+      socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
       loginTabBg: s.authMode === 'login' ? '#FFFDF8' : 'transparent', loginTabFg: s.authMode === 'login' ? '#26231D' : '#8C8474', loginTabShadow: s.authMode === 'login' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       signupTabBg: s.authMode === 'signup' ? '#FFFDF8' : 'transparent', signupTabFg: s.authMode === 'signup' ? '#26231D' : '#8C8474', signupTabShadow: s.authMode === 'signup' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       goHome: () => this.setState({ screen: 'home' }), goHistory: () => this.setState({ screen: 'history' }),
@@ -357,15 +568,17 @@ export default class App extends React.Component {
 
       nameField: s.nameField, setName: e => this.setState({ nameField: e.target.value }),
       inviteField: s.inviteField, setInvite: e => this.setState({ inviteField: e.target.value }),
+      sendInvite: this.sendInvite,
       ageOptions: ['Under 2 wks', '2–8 wks', '2–6 mo', '6 mo +'].map(a => {
         const on = s.age === a
         return { label: a, onTap: () => this.setState({ age: a }), ...(on ? { bg: 'rgba(124,140,90,0.16)', border: OLIVE, fg: '#4A5533' } : { bg: '#FFFDF8', border: 'rgba(38,35,29,0.12)', fg: '#6E6659' }) }
       }),
-      finishOnboard: () => this.setState(p => ({ screen: 'home', babyName: (p.nameField || 'Wren').trim() || 'Wren', age: p.age === '11 weeks' ? '2–8 wks' : p.age })),
+      finishOnboard: this.finishOnboard,
 
-      babyName: s.babyName, ageLabel: s.age,
+      babyName: s.babyName || 'Baby', ageLabel: s.age,
       dateLabel: new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
       sinceCards: cards, todaySummary, timeline,
+      offline: s.offline,
 
       sheetOpen: s.sheet, sheetKicker: s.editId ? 'Editing entry' : (s.offset === 0 ? 'stamped now' : Math.abs(s.offset) + ' min earlier'),
       stampTime: this.clock(stampT), nudges, types,
@@ -375,32 +588,47 @@ export default class App extends React.Component {
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
 
       handoffRows,
-      incoming: s.shift === 'incoming', mine: s.shift === 'mine',
-      dutyInitial: s.shift === 'mine' ? 'B' : 'K', dutyColor: s.shift === 'mine' ? '#7A93B5' : '#7C8C5A',
-      dutyLabel: s.shift === 'mine' ? 'You · on duty' : 'Katrina · on duty',
-      footerShiftLabel: s.shift === 'mine' ? 'Your shift' : 'Take over',
+      hasPartner: !!partner,
+      partnerName, myName,
+      partnerInitial: initial(partner?.name), myInitial: initial(me?.name),
+      incoming: incomingReq && s.screen === 'home',
+      mine: iAmOnDuty && !!partner && activeMine,
+      dutyInitial: iAmOnDuty ? initial(me?.name) : initial(partner?.name),
+      dutyColor: iAmOnDuty ? ME_COLOR : PARTNER_COLOR,
+      dutyLabel: partner ? (iAmOnDuty ? 'You · on duty' : partnerName + ' · on duty') : 'Just you so far',
+      footerShiftLabel: iAmOnDuty ? 'Hand off' : 'Take over',
       requestAgo: 'asked ' + (reqMins < 1 ? 'just now' : reqMins + ' min ago'),
-      requestNote: 'I need to sleep. Can you take him? He’ll want to eat around ' + t1 + ' and again about ' + t2 + ' — that’s his normal.',
+      requestNote: (sh && sh.note) || ('Can you take ' + (s.babyName || 'the baby') + '? Next feeds look like ' + t1 + ' and ' + t2 + ' — that’s the usual rhythm.'),
       requestPlan, requestPlanRows,
       untilOptions: ['Until she wakes', 'Until 6 AM', 'Open-ended'].map(u => {
         const on = s.until === u
         return { label: u, onTap: () => this.setState({ until: u }), ...(on ? { bg: 'rgba(124,140,90,0.16)', border: OLIVE, fg: '#4A5533' } : { bg: '#FFFDF8', border: 'rgba(38,35,29,0.12)', fg: '#6E6659' }) }
       }),
-      theirShiftLine: 'Katrina has been on since ' + this.clock(Date.now() - 6.4 * 3600000) + ' · ' + s.until.toLowerCase(),
-      shiftOpen: s.shiftOpen, sheetTheirs: s.shiftOpen && s.shift !== 'mine' && s.shift !== 'report',
-      sheetMine: s.shiftOpen && s.shift === 'mine', sheetReport: s.shiftOpen && s.shift === 'report',
+      theirShiftLine: completed ? (partnerName + ' has been on since ' + this.clock(sh.ended_at)) : (partnerName + ' has ' + (s.babyName || 'the baby') + ' right now'),
+      shiftOpen: s.shiftOpen,
+      sheetTheirs: s.shiftOpen && !iAmOnDuty && !showReport,
+      sheetMine: s.shiftOpen && iAmOnDuty && !showReport,
+      sheetReport: showReport,
+      reportTitle: iHandedBack ? partnerName + '’s back on' : (partnerName + ' handed back'),
       openShift: this.openShift, closeShift: this.closeShift, acceptShift: this.acceptShift, handBack: this.handBack, addPlanFeed: this.addPlanFeed,
+      requestHandoff: this.requestHandoff,
+      canRequest: iAmOnDuty && !!partner && !(sh && sh.state === 'requested'),
       shiftSince: 'since ' + this.clock(shiftStart), shiftElapsed: this.elapsed(shiftStart),
       nextUp: nextRow ? 'Next: ' + nextRow.label.split(' · ')[0].toLowerCase() + ' ' + nextRow.when : 'Plan done',
       plan: planRows, reportRows,
-      reportRange: this.clock(shiftStart) + ' – ' + this.clock(s.shiftEnd || Date.now()) + ' · ' + this.elapsed(shiftStart) + ' on duty',
-      handbackNote: s.handbackNote, hasHandbackNote: !!s.handbackNote, setHandbackNote: e => this.setState({ handbackNote: e.target.value }),
+      reportRange: this.clock(shiftStart) + ' – ' + this.clock(shiftEnd || Date.now()) + ' · ' + this.elapsed(shiftStart) + ' on duty',
+      handbackNote: s.handbackNote, reportNote: noteShown, hasHandbackNote: !!noteShown,
+      setHandbackNote: e => this.setState({ handbackNote: e.target.value }),
 
       historySubtitle: feedsWk.length + ' feeds · ' + week.filter(e => DIAPERS.includes(e.type)).length + ' diapers logged',
       stats, feedBars: this.bars(FEEDS, 'oklch(0.60 0.075 130)'), diaperBars: this.bars(DIAPERS, 'oklch(0.60 0.075 210)'),
       feedUnitLabel: 'feeds',
-      patternTitle: 'Roughly every ' + this.dur(avgGap) + ' between feeds',
-      patternBody: 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '. Handy for knowing whether the next wake-up is hunger or something else.',
+      patternTitle: avgGap ? 'Roughly every ' + this.dur(avgGap) + ' between feeds' : 'Patterns show up after a few feeds',
+      patternBody: avgGap
+        ? 'Longest stretch this week was ' + this.dur(Math.round(longest)) + '. Handy for knowing whether the next wake-up is hunger or something else.'
+        : 'Keep logging — once there’s a rhythm, it shows up here.',
+      logout: () => this.doLogout(true),
+      invitePending: s.invitePending,
     }
   }
 
@@ -453,13 +681,16 @@ export default class App extends React.Component {
             <div style={S('font-size:14.5px;line-height:1.5;color:#6E6659;padding-top:6px;text-wrap:pretty')}>{v.authBody}</div>
             <div style={S('display:flex;flex-direction:column;gap:10px;padding-top:22px')}>
               {v.isSignup && (
-                <input placeholder="Your name" style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+                <input placeholder="Your name" value={v.authName} onChange={v.setAuthName} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
               )}
-              <input placeholder="Email" type="email" style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
-              <input placeholder="Password" type="password" style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+              <input placeholder="Email" type="email" value={v.authEmail} onChange={v.setAuthEmail} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+              <input placeholder="Password" type="password" value={v.authPassword} onChange={v.setAuthPassword} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
             </div>
             {v.isLogin && (
               <div style={S('display:flex;justify-content:flex-end;padding-top:10px')}><a href="#" onClick={e => e.preventDefault()} style={S('font-size:13.5px;font-weight:600;color:#5F6E42')}>Forgot password?</a></div>
+            )}
+            {v.authError && (
+              <div style={S('font-size:13px;line-height:1.4;color:#A85A45;padding-top:12px;text-wrap:pretty')}>{v.authError}</div>
             )}
             <button type="button" onClick={v.authSubmit} className="hov-olive" style={S('margin-top:18px;width:100%;height:60px;background:#7C8C5A;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(124,140,90,0.3)')}>
               <div style={S('font-size:17px;font-weight:700;color:#FCFBF6')}>{v.authCta}</div>
@@ -471,8 +702,8 @@ export default class App extends React.Component {
               <div style={S('flex:1;height:1px;background:rgba(38,35,29,0.10)')} />
             </div>
             <div style={S('display:flex;flex-direction:column;gap:8px')}>
-              <button type="button" onClick={v.authSubmit} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Apple</button>
-              <button type="button" onClick={v.authSubmit} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Google</button>
+              <button type="button" onClick={v.socialTap} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Apple</button>
+              <button type="button" onClick={v.socialTap} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Google</button>
             </div>
             <div style={S('flex:1')} />
             <div style={S('font-size:12px;line-height:1.5;color:#B5AC98;text-align:center;padding-top:16px;text-wrap:pretty')}>Invited by a partner? Use the same email they sent it to and you’ll land in their log.</div>
@@ -509,7 +740,7 @@ export default class App extends React.Component {
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Who else logs?</div>
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:16px;padding:4px 4px 4px 16px;display:flex;align-items:center;gap:8px')}>
                   <input value={v.inviteField} onChange={v.setInvite} placeholder="katrina@email.com" type="email" style={S('flex:1;min-width:0;background:none;border:none;padding:13px 0;font-size:16px;color:#26231D;outline:none')} />
-                  <button type="button" onClick={v.noop} style={S('background:rgba(124,140,90,0.14);border:none;border-radius:12px;padding:11px 14px;font-family:inherit;font-size:13.5px;font-weight:600;color:#5F6E42;cursor:pointer')}>Invite</button>
+                  <button type="button" onClick={v.sendInvite} style={S('background:rgba(124,140,90,0.14);border:none;border-radius:12px;padding:11px 14px;font-family:inherit;font-size:13.5px;font-weight:600;color:#5F6E42;cursor:pointer')}>Invite</button>
                 </div>
                 <div style={S('font-size:12.5px;color:#8C8474;padding-left:2px')}>They see the same log live. No “when did you…” texts.</div>
               </div>
@@ -530,7 +761,7 @@ export default class App extends React.Component {
                 <Duck size={38} />
                 <div style={S('display:flex;flex-direction:column;gap:1px')}>
                   <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>{v.babyName}</div>
-                  <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.ageLabel} · {v.dateLabel}</div>
+                  <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.ageLabel} · {v.dateLabel}{v.offline ? ' · offline' : ''}</div>
                 </div>
               </div>
               <button type="button" onClick={v.openShift} className="hov-bd" style={S('display:flex;align-items:center;gap:8px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.08);border-radius:999px;padding:5px 13px 5px 6px;cursor:pointer;font-family:inherit')}>
@@ -544,16 +775,16 @@ export default class App extends React.Component {
               {v.incoming && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(124,140,90,0.35);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px 16px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:12px')}>
                   <div style={S('display:flex;align-items:center;gap:10px')}>
-                    <div style={S('width:34px;height:34px;border-radius:999px;background:#7C8C5A;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#FCFBF6')}>K</div>
+                    <div style={S(`width:34px;height:34px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
                     <div style={S('flex:1;display:flex;flex-direction:column;gap:1px')}>
-                      <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>Katrina is handing off</div>
+                      <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.partnerName} is handing off</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.requestAgo}</div>
                     </div>
                     <Sym style={{ fontSize: 22, color: '#7C8C5A' }}>swap_horiz</Sym>
                   </div>
                   <div style={S('font-size:15px;line-height:1.45;color:#4E4A3F;background:rgba(124,140,90,0.09);border-radius:16px;padding:12px 14px;text-wrap:pretty')}>“{v.requestNote}”</div>
                   <div style={S('display:flex;flex-direction:column;gap:6px')}>
-                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Her plan for your shift</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>The plan for your shift</div>
                     <div style={S('display:flex;flex-wrap:wrap;gap:6px')}>
                       {v.requestPlan.map((p, i) => (
                         <div key={i} style={S('display:flex;align-items:center;gap:6px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:6px 11px 6px 8px')}>
@@ -577,7 +808,7 @@ export default class App extends React.Component {
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px 8px;margin-bottom:12px;display:flex;flex-direction:column;gap:4px')}>
                   <div style={S('display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:6px')}>
                     <div style={S('display:flex;align-items:center;gap:9px')}>
-                      <div style={S('width:28px;height:28px;border-radius:999px;background:#7A93B5;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#FCFBF6')}>B</div>
+                      <div style={S(`width:28px;height:28px;border-radius:999px;background:${ME_COLOR};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#FCFBF6`)}>{v.myInitial}</div>
                       <div style={S('display:flex;flex-direction:column')}>
                         <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>Your shift</div>
                         <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.shiftSince}</div>
@@ -635,6 +866,9 @@ export default class App extends React.Component {
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);overflow:hidden')}>
+                {v.timeline.length === 0 && (
+                  <div style={S('padding:22px 16px;text-align:center;font-size:13.5px;color:#B5AC98;text-wrap:pretty')}>Nothing logged yet — tap + and you’re three taps from done.</div>
+                )}
                 {v.timeline.map((e, i) => (
                   <button key={i} type="button" onClick={e.onEdit} className="hov-row" style={S('width:100%;background:none;border:none;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;cursor:pointer;text-align:left;font-family:inherit')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
@@ -724,8 +958,11 @@ export default class App extends React.Component {
                 </div>
               </div>
 
+              {v.invitePending && (
+                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>Invite waiting for {v.invitePending} — they sign up with that email and land here.</div>
+              )}
               <div style={S('text-align:center;padding:16px 0 0')}>
-                <button type="button" onClick={v.reset} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Reset demo data</button>
+                <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>
               </div>
             </div>
           </div>
@@ -746,12 +983,14 @@ export default class App extends React.Component {
                 <div style={S(`font-size:11px;font-weight:600;color:${v.histTabFg};letter-spacing:0.01em`)}>History</div>
               </button>
             </div>
-            <div style={S('display:flex;justify-content:center;padding-top:6px;position:relative;z-index:1')}>
-              <button type="button" onClick={v.openShift} className="hov-dim" style={S('background:none;border:none;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;padding:4px 10px')}>
-                <Sym style={{ fontSize: 16, color: '#8C8474' }}>swap_horiz</Sym>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.footerShiftLabel}</div>
-              </button>
-            </div>
+            {v.hasPartner && (
+              <div style={S('display:flex;justify-content:center;padding-top:6px;position:relative;z-index:1')}>
+                <button type="button" onClick={v.openShift} className="hov-dim" style={S('background:none;border:none;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;padding:4px 10px')}>
+                  <Sym style={{ fontSize: 16, color: '#8C8474' }}>swap_horiz</Sym>
+                  <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.footerShiftLabel}</div>
+                </button>
+              </div>
+            )}
           </>
         )}
 
@@ -836,16 +1075,16 @@ export default class App extends React.Component {
                 <>
                   <div style={S('display:flex;align-items:center;justify-content:center;gap:14px;padding:6px 0 14px')}>
                     <div style={S('display:flex;flex-direction:column;align-items:center;gap:6px')}>
-                      <div style={S('width:56px;height:56px;border-radius:999px;background:#7C8C5A;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6')}>K</div>
-                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>Katrina</div>
+                      <div style={S(`width:56px;height:56px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{v.partnerName}</div>
                     </div>
                     <Sym style={{ fontSize: 28, color: '#B5AC98', marginBottom: 22 }}>arrow_forward</Sym>
                     <div style={S('display:flex;flex-direction:column;align-items:center;gap:6px')}>
-                      <div style={S('width:56px;height:56px;border-radius:999px;background:#7A93B5;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6')}>B</div>
+                      <div style={S(`width:56px;height:56px;border-radius:999px;background:${ME_COLOR};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.myInitial}</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>You</div>
                     </div>
                   </div>
-                  <div style={S("text-align:center;font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Take over from Katrina</div>
+                  <div style={S("text-align:center;font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Take over from {v.partnerName}</div>
                   <div style={S('text-align:center;font-size:13.5px;color:#8C8474;padding-top:4px')}>{v.theirShiftLine}</div>
 
                   <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px;margin-top:18px')}>
@@ -861,7 +1100,7 @@ export default class App extends React.Component {
                   <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:10px')}>
                     <div style={S('display:flex;align-items:center;justify-content:space-between;padding:10px 0 4px')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Plan for your shift</div>
-                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#B5AC98")}>from his usual rhythm</div>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#B5AC98")}>from the usual rhythm</div>
                     </div>
                     {v.requestPlanRows.map((p, i) => (
                       <div key={i} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
@@ -885,14 +1124,14 @@ export default class App extends React.Component {
                     <Sym style={{ fontSize: 22, color: '#FCFBF6' }}>check</Sym>
                     <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>I’ve got him — start my shift</div>
                   </button>
-                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px')}>Katrina gets a “Ben’s on duty” ping and can sleep.</div>
+                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px')}>{v.partnerName} gets a “you’re covered” ping and can sleep.</div>
                 </>
               )}
 
               {v.sheetMine && (
                 <>
                   <div style={S('display:flex;align-items:center;gap:12px;padding:4px 4px 14px')}>
-                    <div style={S('width:48px;height:48px;border-radius:999px;background:#7A93B5;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#FCFBF6')}>B</div>
+                    <div style={S(`width:48px;height:48px;border-radius:999px;background:${ME_COLOR};display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#FCFBF6`)}>{v.myInitial}</div>
                     <div style={S('display:flex;flex-direction:column;gap:2px')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:22px;letter-spacing:-0.02em")}>Your shift so far</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#8C8474")}>{v.shiftSince} · {v.shiftElapsed}</div>
@@ -907,14 +1146,20 @@ export default class App extends React.Component {
                     ))}
                   </div>
                   <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:12px 16px;margin-top:10px;display:flex;flex-direction:column;gap:8px')}>
-                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Note for Katrina</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Note for {v.partnerName}</div>
                     <input value={v.handbackNote} onChange={v.setHandbackNote} placeholder="e.g. took the 1am bottle slow, fell asleep on me" style={S('width:100%;box-sizing:border-box;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:12px 13px;font-size:14.5px;color:#26231D;outline:none')} />
                   </div>
                   <button type="button" onClick={v.handBack} className="hov-olive" style={S('margin-top:14px;width:100%;height:62px;background:#7C8C5A;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(124,140,90,0.3)')}>
                     <Sym style={{ fontSize: 22, color: '#FCFBF6' }}>swap_horiz</Sym>
-                    <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>Hand back to Katrina</div>
+                    <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>Hand back to {v.partnerName}</div>
                   </button>
-                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px;text-wrap:pretty')}>She gets this summary as a card — no scrolling the log, no “when did you…”</div>
+                  {v.canRequest && (
+                    <button type="button" onClick={v.requestHandoff} className="hov-dim" style={S("margin-top:10px;width:100%;background:none;border:none;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#5F6E42;padding:6px 0")}>
+                      <Sym style={{ fontSize: 16, color: '#5F6E42' }}>notifications</Sym>
+                      Ask {v.partnerName} to take over — sends your note
+                    </button>
+                  )}
+                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px;text-wrap:pretty')}>They get this summary as a card — no scrolling the log, no “when did you…”</div>
                 </>
               )}
 
@@ -925,7 +1170,7 @@ export default class App extends React.Component {
                       <Sym style={{ fontSize: 24, color: '#5F6E42' }}>task_alt</Sym>
                     </div>
                     <div style={S('display:flex;flex-direction:column;gap:2px')}>
-                      <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:22px;letter-spacing:-0.02em")}>Katrina’s back on</div>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:22px;letter-spacing:-0.02em")}>{v.reportTitle}</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#8C8474")}>{v.reportRange}</div>
                     </div>
                   </div>
@@ -938,7 +1183,7 @@ export default class App extends React.Component {
                     ))}
                   </div>
                   {v.hasHandbackNote && (
-                    <div style={S('font-size:14.5px;line-height:1.45;color:#4E4A3F;background:rgba(124,140,90,0.09);border-radius:16px;padding:12px 14px;margin-top:10px')}>“{v.handbackNote}”</div>
+                    <div style={S('font-size:14.5px;line-height:1.45;color:#4E4A3F;background:rgba(124,140,90,0.09);border-radius:16px;padding:12px 14px;margin-top:10px')}>“{v.reportNote}”</div>
                   )}
                   <button type="button" onClick={v.closeShift} className="hov-dark" style={S('margin-top:14px;width:100%;height:56px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:inherit')}>
                     <div style={S('font-size:16px;font-weight:700;color:#FAF6EF')}>Done</div>

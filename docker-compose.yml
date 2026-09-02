@@ -1,7 +1,54 @@
+x-laravel-env: &laravel-env
+  APP_NAME: "Baby Log"
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: "***REMOVED-ROTATED***="
+  APP_URL: "http://localhost:3500"
+  LOG_CHANNEL: stderr
+  DB_CONNECTION: sqlite
+  DB_DATABASE: /data/database.sqlite
+  SESSION_DRIVER: cookie
+  CACHE_STORE: file
+  QUEUE_CONNECTION: sync
+  BROADCAST_CONNECTION: reverb
+  REVERB_APP_ID: babylog
+  REVERB_APP_KEY: babylog-local-key
+  REVERB_APP_SECRET: ***REMOVED-ROTATED***
+  REVERB_HOST: reverb
+  REVERB_PORT: "8080"
+  REVERB_SCHEME: http
+
 services:
   app:
     build: .
     container_name: baby-log-app
     ports:
       - "3500:80"
+    depends_on:
+      - api
+      - reverb
     restart: unless-stopped
+
+  api:
+    build: ./api
+    container_name: baby-log-api
+    environment:
+      <<: *laravel-env
+    ports:
+      - "3501:8000"
+    volumes:
+      - babylog-db:/data
+    restart: unless-stopped
+
+  reverb:
+    build: ./api
+    container_name: baby-log-reverb
+    command: ["reverb"]
+    environment:
+      <<: *laravel-env
+    ports:
+      - "3502:8080"
+    restart: unless-stopped
+
+volumes:
+  babylog-db:

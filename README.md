@@ -12,17 +12,20 @@ Three taps from pocket to logged. An installable, local-first PWA for two parent
 
 ## Stack
 
-- Vite + React 18, no other runtime deps. Design styles carried over 1:1 via a tiny CSS-string→style-object parser ([src/s.js](src/s.js)).
-- Local-first: all state persists to `localStorage`; a service worker caches the app shell and fonts so 3am logging never waits on a network.
-- Docker: multi-stage build (Node 22 → nginx) with SPA fallback and immutable-asset caching.
+- **Frontend**: Vite + React 18, no other runtime deps. Design styles carried over 1:1 via a tiny CSS-string→style-object parser ([src/s.js](src/s.js)).
+- **API**: Laravel (in [api/](api/)) with SQLite + Sanctum bearer tokens. Households link two parents; an invite by email drops the partner into the same log when they sign up. Endpoints: auth, baby setup, invite, batch entry sync, shift request/accept/plan/handback. `GET /api/state?since=` is the single polling endpoint.
+- **Realtime**: Laravel Reverb (WebSockets, Pusher protocol) pushes a lightweight `HouseholdTouched` poke on every write — entries, shifts, invites — over a Sanctum-authorized private `household.{id}` channel. Clients react by pulling `/api/state`, so the sync path is identical for sockets, polls, and reconnects. Writes carry `X-Socket-ID` so you're never poked by your own changes.
+- **Local-first sync**: entries write to `localStorage` instantly with an outbox queue, then push in the background. The socket carries updates; a slow poll (60s), plus resync on focus/online/reconnect, is the fallback — 3am logging never waits on a network. Deletes are tombstones so they sync too. A service worker caches the app shell and fonts for offline loads.
+- **Shifts are real between two accounts**: request a handoff with a note ("Ask X to take over"), the partner sees the incoming card and accepts, hand back generates a shift report that auto-surfaces on the other phone.
+- **Docker**: three services — the PWA (Node build → nginx, which proxies `/api` to the API and `/app` websockets to Reverb), the Laravel API (`php artisan serve` + SQLite volume), and Reverb (`php artisan reverb:start`).
 
 ## Run
 
 ```bash
-docker compose up -d --build   # serves on http://localhost:3500
+docker compose up -d --build   # app on http://localhost:3500 (API :3501, Reverb :3502 for dev)
 ```
 
-Dev mode:
+Frontend dev mode (proxies `/api` to the dockerized API on :3501):
 
 ```bash
 npm install
@@ -33,5 +36,7 @@ Port 3500 was chosen to avoid this machine's occupied 3xxx block (3000/3100/3200
 
 ## Notes
 
-- The partner ("Katrina") side is simulated locally — the design's Laravel sync API is a future phase; entries are structured (`{id, type, t, detail}`) so a sync layer can slot in.
+- To try both sides locally, open `http://localhost:3500` and `http://127.0.0.1:3500` — different origins, so each tab holds its own account.
+- The API container runs `php artisan migrate --force` on boot; the SQLite file lives in the `babylog-db` volume (`docker compose down -v` wipes it).
+- Host PHP on this machine lacks several extensions, so all composer/artisan work runs through containers (`docker run --rm -v "$PWD/api:/app" -w /app composer:2 php artisan …`).
 - Original design files (including the `.dc.html` comp and iOS frame) are kept under [design/](design/) for reference.
