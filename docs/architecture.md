@@ -52,9 +52,10 @@ HTTPS origin the app already needs.
   endpoints self-prune when a push bounces.
 - **Event pushes** fire inline from write endpoints: shift request / accept /
   handback (on by default — a partner asking you to take over should reach a
-  sleeping phone, so these ignore quiet hours) and opt-in partner activity
-  ("Katrina logged a bottle", throttled to one per 10 min so backfill bursts
-  don't rattle anyone).
+  sleeping phone, so these ignore quiet hours), a nursing/pump timer starting
+  (on by default but informational, so it honors quiet hours), and opt-in
+  partner activity ("Katrina logged a bottle", throttled to one per 10 min so
+  backfill bursts don't rattle anyone).
 - **Reminder pushes** come from `babylog:reminders`, run every minute by a
   `schedule:work` process the api container starts next to `artisan serve`:
   feed gap (learned cluster-aware rhythm or a fixed interval, optionally only

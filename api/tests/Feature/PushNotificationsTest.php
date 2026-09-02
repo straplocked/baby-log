@@ -138,6 +138,28 @@ class PushNotificationsTest extends TestCase
         $this->assertCount(0, $this->push->sent);
     }
 
+    // ── nursing / pump timers ─────────────────────────────────────────────────
+
+    public function test_starting_a_timer_pings_the_partner(): void
+    {
+        [$ben, $kat, $benId, $katId] = $this->household();
+
+        // on by default — Katrina learns Ben started nursing
+        $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($ben))->assertOk();
+        $this->assertCount(1, $this->push->to($katId));
+        $this->assertStringContainsString('started nursing', $this->push->to($katId)[0]['title']);
+        $this->assertCount(0, $this->push->to($benId)); // starter isn't pinged
+
+        // stopping is quiet (the logged entry handles any partner-activity ping)
+        $this->postJson('/api/timer/stop', [], $this->authed($ben))->assertOk();
+        $this->assertCount(1, $this->push->to($katId));
+
+        // pref off → silence
+        $this->postJson('/api/notify-prefs', ['timer' => false], $this->authed($kat))->assertOk();
+        $this->postJson('/api/timer/start', ['type' => 'pump'], $this->authed($ben))->assertOk();
+        $this->assertCount(1, $this->push->to($katId));
+    }
+
     // ── partner activity ──────────────────────────────────────────────────────
 
     public function test_partner_activity_is_opt_in_and_throttled(): void

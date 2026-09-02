@@ -83,7 +83,7 @@ const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
-  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey']
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -116,6 +116,7 @@ export default class App extends React.Component {
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, durDrag: null,
+      activeTimer: null, timerSide: null, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -139,6 +140,8 @@ export default class App extends React.Component {
       // realtime pokes carry the load; poll only as fallback / slow heartbeat
       if (!isEchoConnected() || this.state.tick % 3 === 0) this.sync()
     }, 20000)
+    // a running timer needs a live second hand; idle when none is going
+    this._sec = setInterval(() => { if (this.state.activeTimer) this.setState(s => ({ tick: s.tick + 1 })) }, 1000)
     this._wake = () => this.sync()
     window.addEventListener('focus', this._wake)
     window.addEventListener('online', this._wake)
@@ -147,7 +150,7 @@ export default class App extends React.Component {
     this.refreshPush()
   }
   componentWillUnmount() {
-    clearInterval(this._iv); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
+    clearInterval(this._iv); clearInterval(this._sec); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
     window.removeEventListener('focus', this._wake)
     window.removeEventListener('online', this._wake)
     document.removeEventListener('visibilitychange', this._wake)
@@ -228,6 +231,8 @@ export default class App extends React.Component {
       }
       if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
       if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
+      // server owns the running timer, except while our own start/stop is in flight
+      if (!this._timerBusy) next.activeTimer = st.timer || null
       if (st.baby) {
         next.babyName = st.baby.name
         if (st.baby.age) next.age = st.baby.age
@@ -314,6 +319,7 @@ export default class App extends React.Component {
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
+      activeTimer: null, timerSide: null, manualDur: false,
     })
   }
 
@@ -471,6 +477,54 @@ export default class App extends React.Component {
   }
   lastOf(keys) { return this.live().filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
 
+  // ── nursing / pump timers (server-backed, live) ────────────────────────────
+  stopwatch(ms) {
+    const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60
+    const pad = n => String(n).padStart(2, '0')
+    return (h ? h + ':' + pad(m) : m) + ':' + pad(ss)
+  }
+  startTimer = type => {
+    // pre-picked nurse side (if any) is remembered locally for the stop log
+    const side = type === 'nurse' ? (this.state.detail || this.defaultDetail('nurse')) : null
+    this._timerBusy = true
+    this.setState({
+      sheet: false, manualDur: false,
+      activeTimer: { id: 'local', type, started_at: Date.now(), user_id: this.state.me?.id },
+      timerSide: side,
+    })
+    api.timerStart(type)
+      .then(r => this.setState({ activeTimer: r.timer }))
+      .catch(() => this.setState({ offline: true }))
+      .finally(() => { this._timerBusy = false })
+  }
+  stopTimer = () => {
+    const t = this.state.activeTimer
+    if (!t || t.user_id !== this.state.me?.id) return // only the parent who started can stop + log
+    const mins = Math.max(1, Math.round((Date.now() - t.started_at) / 60000))
+    this._timerBusy = true
+    this.setState({ activeTimer: null })
+    api.timerStop().catch(() => this.setState({ offline: true })).finally(() => { this._timerBusy = false })
+    if (t.type === 'nurse') {
+      // nursing: measured side + duration log straight away, undo available
+      const side = this.state.timerSide || this.defaultDetail('nurse')
+      const detail = [side, mins + 'm'].filter(Boolean).join(' · ')
+      const entry = { id: uuid(), type: 'nurse', t: t.started_at, detail, by: this.state.me?.id }
+      this.setState(s => ({
+        entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
+        toast: 'Nursing logged · ' + this.dur(mins), lastAdded: entry.id, timerSide: null,
+      }), () => this.flushSoon())
+      this.bumpToast()
+    } else {
+      // pumping needs the amount — open the sheet (manual mode) with the timed duration filled in
+      this._base = t.started_at
+      const last = this.lastOf(['pump'])
+      this.setState({
+        sheet: true, editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true,
+        detail: last ? (dSplit(last.detail).n ?? 4) : 4, detail2: mins, sheetTall: false, sheetDragY: 0, timerSide: null,
+      })
+    }
+  }
+
   // ── shifts (server-backed) ─────────────────────────────────────────────────
   openShift = () => {
     if (!this.state.partner) return // no one to hand to yet
@@ -535,7 +589,7 @@ export default class App extends React.Component {
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, sheetTall: false, sheetDragY: 0 })
+    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, sheetTall: false, sheetDragY: 0, manualDur: false })
   }
   defaultDetail(k) {
     const d = T(k).detail
@@ -793,6 +847,12 @@ export default class App extends React.Component {
     const detailStr = (kind === 'amount' ? (s.detail != null ? ' ' + s.detail + ' ' + this.unit() : '') : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : '')
       + (s.detail2 != null ? (kind2 === 'milk' ? ' · ' + (s.detail2 === 'formula' ? 'formula' : 'breast milk') : ' · ' + this.dur(s.detail2)) : '')
 
+    // nursing/pump default to the live timer; a manual toggle logs a past session
+    const timerType = (st.key === 'nurse' || st.key === 'pump') && !s.editId
+    const timerFirst = timerType && !s.manualDur
+    const at = s.activeTimer
+    const atType = at ? T(at.type) : null
+
     const feed = this.lastOf(FEEDS), dia = this.lastOf(DIAPERS), sleep = this.lastOf(['sleep'])
     const handoffRows = [
       { label: 'Last fed', value: feed ? this.elapsed(feed.t) + ' ago' : '—' },
@@ -951,9 +1011,26 @@ export default class App extends React.Component {
       pickTime: this.pickTime,
       showTimePicker: e => { try { e.currentTarget.showPicker() } catch { /* older browsers fall back to focus */ } },
       nudges, types,
-      hasDetail: !!kind, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
-      hasDetail2: !!kind2, detail2Label: kind2 === 'milk' ? 'Milk' : 'Duration', detail2Options,
+      hasDetail: !!kind && !timerFirst, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
+      hasDetail2: !!kind2 && !timerFirst, detail2Label: kind2 === 'milk' ? 'Milk' : 'Duration', detail2Options,
       durDragMove: this.durDragMove, durDragEnd: this.durDragEnd,
+      showStamp: !timerFirst,
+      timerFirst,
+      startTimerLabel: 'Start ' + (st.key === 'nurse' ? 'nursing' : 'pumping'),
+      startTimer: () => this.startTimer(st.key),
+      canManual: timerType,
+      toManual: () => this.setState({ manualDur: true }),
+      toTimer: () => this.setState({ manualDur: false }),
+      manualHint: st.key === 'nurse' ? 'Log a past feed' : 'Log a past session',
+      // running-timer banner on Now
+      timerActive: !!at,
+      timerLabel: at ? (at.type === 'nurse' ? 'Nursing' : 'Pumping') : '',
+      timerIcon: atType ? atType.icon : 'timer',
+      timerColor: atType ? atType.color : OLIVE,
+      timerElapsed: at ? this.stopwatch(Date.now() - at.started_at) : '',
+      timerMine: !!(at && me && at.user_id === me.id),
+      timerWho: at ? (at.user_id === me?.id ? 'You' : partnerName) : '',
+      stopTimer: this.stopTimer,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '',
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
@@ -1034,6 +1111,7 @@ export default class App extends React.Component {
             : 'Flip it on and allow the permission — then pick what’s worth a ping.',
           rows: [
             row('handoff', 'Handoff asks & handbacks', 'swap_horiz', '#7C8C5A'),
+            ...(partner ? [row('timer', partnerName + ' starts a timer', 'timer', 'oklch(0.60 0.075 350)')] : []),
             ...(partner ? [row('partner', partnerName + ' logs something', 'edit_note', 'oklch(0.60 0.075 300)')] : []),
             row('feed', 'Feed reminder', 'local_drink', 'oklch(0.60 0.075 250)'),
             ...(this.trackOn('sleep') ? [row('wake', 'Wake window watch', 'wb_twilight', 'oklch(0.60 0.075 25)')] : []),
@@ -1213,6 +1291,28 @@ export default class App extends React.Component {
             </div>
 
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
+
+              {v.timerActive && (
+                <div style={S(`background:#FFFDF8;border:1px solid ${v.timerColor};border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:13px;position:relative;overflow:hidden`)}>
+                  <div style={S(`position:absolute;inset:0;opacity:0.06;background:${v.timerColor}`)} />
+                  <div style={S('position:relative;width:42px;height:42px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
+                    <div style={S(`position:absolute;inset:0;background:${v.timerColor};opacity:0.18`)} />
+                    <Sym style={{ position: 'relative', fontSize: 22, color: v.timerColor }}>{v.timerIcon}</Sym>
+                  </div>
+                  <div style={S('position:relative;flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
+                    <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.timerLabel} · {v.timerWho}</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:700;font-size:24px;letter-spacing:-0.03em;color:#3D392F;font-variant-numeric:tabular-nums")}>{v.timerElapsed}</div>
+                  </div>
+                  {v.timerMine ? (
+                    <button type="button" onClick={v.stopTimer} className="hov-dark" style={S('position:relative;height:44px;padding:0 20px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
+                      <Sym style={{ fontSize: 18, color: '#FAF6EF' }}>stop</Sym>
+                      <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop</div>
+                    </button>
+                  ) : (
+                    <div style={S("position:relative;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;flex-shrink:0")}>in progress</div>
+                  )}
+                </div>
+              )}
 
               {v.incoming && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(124,140,90,0.35);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px 16px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:12px')}>
@@ -1653,6 +1753,7 @@ export default class App extends React.Component {
               </div>
               <div style={S('position:relative;z-index:1;flex:1;min-height:0;overflow:auto')}>
 
+                {v.showStamp && (
                 <div style={S('display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px 12px')}>
                   <label style={S('position:relative;display:flex;flex-direction:column;gap:3px;cursor:pointer')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>{v.sheetKicker}</div>
@@ -1668,6 +1769,13 @@ export default class App extends React.Component {
                     ))}
                   </div>
                 </div>
+                )}
+                {v.timerFirst && (
+                  <div style={S('padding:2px 4px 12px')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>Time it live</div>
+                    <div style={S('font-size:13px;color:#6E6659;padding-top:3px;text-wrap:pretty')}>Hit start, and stop when you’re done — the duration logs itself.</div>
+                  </div>
+                )}
 
                 <div style={S('display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px')}>
                   {v.types.map(t => (
@@ -1715,13 +1823,23 @@ export default class App extends React.Component {
                   </div>
                 )}
 
-                <button type="button" onClick={v.save} className="hov-olive" style={S('margin-top:16px;width:100%;height:66px;background:#7C8C5A;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(124,140,90,0.3)')}>
-                  <Sym style={{ fontSize: 23, color: '#FCFBF6' }}>check</Sym>
-                  <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>{v.saveLabel}</div>
-                </button>
+                {v.timerFirst ? (
+                  <button type="button" onClick={v.startTimer} className="hov-olive" style={S('margin-top:16px;width:100%;height:66px;background:#7C8C5A;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(124,140,90,0.3)')}>
+                    <Sym style={{ fontSize: 23, color: '#FCFBF6' }}>play_arrow</Sym>
+                    <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>{v.startTimerLabel}</div>
+                  </button>
+                ) : (
+                  <button type="button" onClick={v.save} className="hov-olive" style={S('margin-top:16px;width:100%;height:66px;background:#7C8C5A;border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(124,140,90,0.3)')}>
+                    <Sym style={{ fontSize: 23, color: '#FCFBF6' }}>check</Sym>
+                    <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>{v.saveLabel}</div>
+                  </button>
+                )}
 
                 <div style={S('display:flex;align-items:center;justify-content:space-between;padding:12px 6px 0')}>
                   <button type="button" onClick={v.closeSheet} style={S("background:none;border:none;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Cancel</button>
+                  {v.canManual && (
+                    <button type="button" onClick={v.timerFirst ? v.toManual : v.toTimer} style={S("background:none;border:none;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#5F6E42;cursor:pointer")}>{v.timerFirst ? v.manualHint : 'Use a timer'}</button>
+                  )}
                   {v.editing && (
                     <button type="button" onClick={v.remove} style={S("background:none;border:none;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#A85A45;cursor:pointer")}>Delete entry</button>
                   )}

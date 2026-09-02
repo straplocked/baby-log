@@ -40,6 +40,7 @@ class SyncController extends Controller
             'onDutyUserId' => $household->on_duty_user_id,
             'settings' => $household->settings,
             'shift' => $shift,
+            'timer' => $household->active_timer,
             'entries' => $entries,
             'serverTime' => now()->getTimestampMs(),
             'vapidPublicKey' => app(PushService::class)->publicKey(),

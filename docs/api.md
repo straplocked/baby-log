@@ -86,6 +86,16 @@ Any subset of the `notifyPrefs` keys shown in `/state`; provided keys merge over
 
 **What gets sent** (see [architecture.md](architecture.md#notifications)): handoff request/accept/handback pushes fire inline from the shift endpoints (respecting the recipient's `handoff` pref, ignoring quiet hours); partner-activity pushes fire from `POST /entries` (opt-in, throttled to one per 10 min); feed-gap, wake-window, and daily-meds reminders are sent by `babylog:reminders`, scheduled every minute.
 
+## Timers — all auth + throttle 120/min
+
+The live nursing/pump timer. One per household, synced via `/state` (`timer`: `{id, type, started_at, user_id}` or null). Only the running state lives server-side; the resulting entry is written client-side through `/entries` on stop.
+
+### `POST /timer/start`
+`{ type: nurse|pump }` → sets (or replaces) the household's `active_timer`, broadcasts a poke, and — if the partner's `timer` pref is on and they're not in quiet hours — pushes them "{name} started nursing/pumping". Returns `{ ok, timer }`.
+
+### `POST /timer/stop`
+Clears `active_timer`, broadcasts a poke. Returns `{ ok }`. The client logs the nurse/pump entry (with the measured duration) separately.
+
 ## Shifts — all auth + throttle 120/min
 
 ### `POST /shifts/request`

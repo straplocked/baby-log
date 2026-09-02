@@ -26,6 +26,7 @@ class User extends Authenticatable
      */
     public const NOTIFY_DEFAULTS = [
         'handoff' => true,      // shift request / accept / handback
+        'timer' => true,        // partner started a nursing / pump timer
         'partner' => false,     // "your partner logged something"
         'feed' => false,        // feed-gap reminder
         'feedEvery' => null,    // minutes between feeds; null = learned household rhythm

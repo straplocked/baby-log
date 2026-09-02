@@ -8,11 +8,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Household extends Model
 {
-    protected $fillable = ['invite_email', 'invite_code_hash', 'on_duty_user_id', 'settings'];
+    protected $fillable = ['invite_email', 'invite_code_hash', 'on_duty_user_id', 'settings', 'active_timer'];
 
     protected $hidden = ['invite_code_hash'];
 
-    protected $casts = ['settings' => 'array'];
+    protected $casts = ['settings' => 'array', 'active_timer' => 'array'];
 
     public function users(): HasMany
     {

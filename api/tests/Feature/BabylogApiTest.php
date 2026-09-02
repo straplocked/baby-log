@@ -213,4 +213,30 @@ class BabylogApiTest extends TestCase
     {
         $this->getJson('/api/state')->assertStatus(401);
     }
+
+    // ── timers ────────────────────────────────────────────────────────────────
+
+    public function test_timer_start_and_stop_sync_to_the_household(): void
+    {
+        config(['babylog.open_registration' => true]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $this->assertNull($this->getJson('/api/state', $this->authed($ben))->json('timer'));
+
+        $timer = $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($ben))->assertOk()->json('timer');
+        $this->assertSame('nurse', $timer['type']);
+        $this->assertNotEmpty($timer['started_at']);
+
+        $synced = $this->getJson('/api/state', $this->authed($ben))->json('timer');
+        $this->assertSame('nurse', $synced['type']);
+
+        $this->postJson('/api/timer/stop', [], $this->authed($ben))->assertOk();
+        $this->assertNull($this->getJson('/api/state', $this->authed($ben))->json('timer'));
+    }
+
+    public function test_timer_rejects_unknown_type(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/timer/start', ['type' => 'bottle'], $this->authed($ben))->assertStatus(422);
+    }
 }

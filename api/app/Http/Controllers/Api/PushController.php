@@ -52,6 +52,7 @@ class PushController extends Controller
     {
         $data = $request->validate([
             'handoff' => ['sometimes', 'boolean'],
+            'timer' => ['sometimes', 'boolean'],
             'partner' => ['sometimes', 'boolean'],
             'feed' => ['sometimes', 'boolean'],
             'feedEvery' => ['sometimes', 'nullable', 'integer', 'in:120,150,180,210,240'],
