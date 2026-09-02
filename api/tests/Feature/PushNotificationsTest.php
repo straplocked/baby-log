@@ -78,6 +78,22 @@ class PushNotificationsTest extends TestCase
         $this->assertSame(0, PushSubscription::count());
     }
 
+    public function test_vapid_subject_is_always_a_valid_uri_for_apple(): void
+    {
+        // an http/localhost APP_URL must not leak through as the VAPID sub —
+        // Apple rejects it, silently killing iOS delivery
+        config(['babylog.vapid_subject' => null, 'app.url' => 'http://localhost:3500']);
+        $this->assertSame('mailto:babylog@localhost', (new \App\Services\PushService)->vapidSubject());
+
+        // a real https origin is used as-is
+        config(['app.url' => 'https://babylog.example.com']);
+        $this->assertSame('https://babylog.example.com', (new \App\Services\PushService)->vapidSubject());
+
+        // an explicit override wins
+        config(['babylog.vapid_subject' => 'mailto:hi@example.com', 'app.url' => 'http://localhost:3500']);
+        $this->assertSame('mailto:hi@example.com', (new \App\Services\PushService)->vapidSubject());
+    }
+
     public function test_state_carries_vapid_key_and_default_prefs(): void
     {
         $ben = $this->register('Ben', 'ben@example.com');

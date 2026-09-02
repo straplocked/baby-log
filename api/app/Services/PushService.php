@@ -84,11 +84,32 @@ class PushService
         return $this->keys = ['publicKey' => $row->public_key, 'privateKey' => $row->private_key];
     }
 
+    /**
+     * The VAPID `sub` claim. Apple's push service (web.push.apple.com) rejects
+     * anything that isn't an https: or mailto: URI, so a default APP_URL of
+     * http://localhost:3500 silently kills all iOS delivery while FCM/Mozilla
+     * accept it — a one-directional "works on Android, dead on iPhone" bug.
+     * Prefer an explicit VAPID_SUBJECT, then a real https app URL, else mailto.
+     */
+    public function vapidSubject(): string
+    {
+        $configured = config('babylog.vapid_subject');
+        if (is_string($configured) && trim($configured) !== '') {
+            return trim($configured);
+        }
+        $url = (string) config('app.url');
+        if (str_starts_with($url, 'https://')) {
+            return $url;
+        }
+
+        return 'mailto:babylog@'.(parse_url($url, PHP_URL_HOST) ?: 'localhost');
+    }
+
     private function client(): WebPush
     {
         return $this->client ??= new WebPush(
             ['VAPID' => [
-                'subject' => config('app.url') ?: 'mailto:babylog@localhost',
+                'subject' => $this->vapidSubject(),
                 'publicKey' => $this->keys()['publicKey'],
                 'privateKey' => $this->keys()['privateKey'],
             ]],

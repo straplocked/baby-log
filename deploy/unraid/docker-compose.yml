@@ -6,7 +6,12 @@ x-laravel-env: &laravel-env
   APP_ENV: production
   APP_DEBUG: "false"
   APP_KEY: ${APP_KEY}
+  # your real public https origin — also used as the Web Push VAPID subject,
+  # which Apple requires to be https:/mailto: or it drops all iOS pushes
   APP_URL: ${APP_URL:-http://localhost:3500}
+  # override the VAPID subject if APP_URL isn't your public https origin
+  # (e.g. mailto:you@example.com); otherwise APP_URL is used when it's https
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-}
   LOG_CHANNEL: stderr
   DB_CONNECTION: sqlite
   DB_DATABASE: /data/database.sqlite

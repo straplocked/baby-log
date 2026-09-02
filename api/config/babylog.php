@@ -34,4 +34,14 @@ return [
     'vapid_public' => env('VAPID_PUBLIC_KEY'),
     'vapid_private' => env('VAPID_PRIVATE_KEY'),
 
+    /*
+    | VAPID subject (JWT `sub`): the contact URI sent to the push service.
+    | MUST be an https: or mailto: URI — Apple silently drops iOS pushes
+    | otherwise. Defaults to APP_URL when it's https, else a mailto. Set this
+    | (e.g. mailto:you@example.com or your https public URL) if APP_URL isn't
+    | your real public https origin.
+    */
+
+    'vapid_subject' => env('VAPID_SUBJECT'),
+
 ];
