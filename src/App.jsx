@@ -185,7 +185,7 @@ export default class App extends React.Component {
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       activeTimer: null, timerSide: null, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
-      toast: null, lastAdded: null,
+      toast: null, toastLeaving: false, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
@@ -193,7 +193,7 @@ export default class App extends React.Component {
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       exportRange: 'all', // ephemeral — resets to Everything each load on purpose
       notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
-      shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
+      shiftOpen: false, shiftIn: false, shiftLeaving: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
       fx: getFx(), // device-local (babylog:fx), not in PERSIST
     }
     const saved = loadSaved()
@@ -234,11 +234,12 @@ export default class App extends React.Component {
     // A stale entry can survive a reload mid-overlay — drop it so back exits.
     this._pop = () => {
       if (this.state.sheet) return this.dismissSheet()
+      if (this.state.shiftOpen) return this.dismissShift()
       if (this.state.screen === 'history' && this.state.historyDay) return this.setState({ historyDay: null })
       if (this.state.screen === 'settings') this.setState({ screen: 'history' })
     }
     window.addEventListener('popstate', this._pop)
-    if (window.history.state?.blSheet || window.history.state?.blSettings || window.history.state?.blDay) {
+    if (window.history.state?.blSheet || window.history.state?.blShift || window.history.state?.blSettings || window.history.state?.blDay) {
       try { window.history.replaceState(null, '') } catch { /* fine */ }
     }
     // the reset token was captured into state — scrub it out of the URL/history
@@ -253,6 +254,8 @@ export default class App extends React.Component {
     document.removeEventListener('visibilitychange', this._wake)
     window.removeEventListener('popstate', this._pop)
     if (this._sheetTo) clearTimeout(this._sheetTo)
+    if (this._shiftTo) clearTimeout(this._shiftTo)
+    if (this._toGone) clearTimeout(this._toGone)
     stopEcho()
   }
 
@@ -348,7 +351,7 @@ export default class App extends React.Component {
       if (sh && sh.state === 'completed' && me && sh.user_id !== me.id && sh.id !== dismissedShiftId
         && !shiftOpen && this._autoOpened !== sh.id && screen === 'home') {
         this._autoOpened = sh.id
-        this.setState({ shiftOpen: true })
+        this.mountShift()
       }
     })
   }
@@ -452,7 +455,8 @@ export default class App extends React.Component {
       forgotOpen: false, forgotEmail: '', forgotResult: null,
       entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null, inviteCode: null, inviteMailed: false,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
-      babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false, shiftOpen: false, toast: null,
+      babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false,
+      shiftOpen: false, shiftIn: false, shiftLeaving: false, toast: null, toastLeaving: false,
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
@@ -699,20 +703,49 @@ export default class App extends React.Component {
       this.sync()
     } else this.setState({ offline: true })
   }
+  // every shift-sheet opening routes through here — same lifecycle as mountSheet:
+  // slide-up entrance (mount off-screen, translate home two frames later) plus a
+  // {blShift} history entry so the Android back gesture closes it
+  mountShift = fields => {
+    if (this._shiftTo) { clearTimeout(this._shiftTo); this._shiftTo = null }
+    if (!this.state.shiftOpen && !window.history.state?.blShift) {
+      try { window.history.pushState({ blShift: true }, '') } catch { /* history blocked — back just exits */ }
+    }
+    this.setState(s => ({ shiftOpen: true, shiftLeaving: false, shiftIn: reduceMotion(), ...(typeof fields === 'function' ? fields(s) : fields) }))
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (this.state.shiftOpen) this.setState({ shiftIn: true })
+    }))
+  }
   openShift = () => {
     if (!this.state.partner) return // no one to hand to yet
-    this.setState(s => ({ shiftOpen: true, planDraft: s.planDraft || this.draftPlan() }))
+    this.mountShift(s => ({ planDraft: s.planDraft || this.draftPlan() }))
   }
-  closeShift = () => this.setState(s => ({
-    shiftOpen: false,
-    dismissedShiftId: (s.serverShift && s.serverShift.state === 'completed') ? s.serverShift.id : s.dismissedShiftId,
-  }))
+  closeShift = () => {
+    // consume our history entry when it's on top; the popstate runs the
+    // animated close, same as a native back gesture would
+    if (this.state.shiftOpen && window.history.state?.blShift) return window.history.back()
+    this.dismissShift()
+  }
+  dismissShift = () => {
+    if (!this.state.shiftOpen) return
+    this.setState({ shiftOpen: false, shiftIn: false, shiftLeaving: true })
+    this._shiftTo = setTimeout(() => {
+      this._shiftTo = null
+      // marking the report dismissed waits for the exit — flipping it earlier
+      // would swap the report to the take-over view mid-slide
+      this.setState(s => ({
+        shiftLeaving: false,
+        dismissedShiftId: (s.serverShift && s.serverShift.state === 'completed') ? s.serverShift.id : s.dismissedShiftId,
+      }))
+    }, reduceMotion() ? 0 : 340)
+  }
   acceptShift = () => {
     const s = this.state
     const plan = (s.planDraft || this.draftPlan()).filter(p => !s.planOff.includes(p.id))
     const until = s.until
+    this.closeShift()
     this.setState(st => ({
-      shiftOpen: false, shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
+      shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
       onDutyUserId: st.me?.id ?? st.onDutyUserId,
       serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, started_at: Date.now() },
       toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', lastAdded: null,
@@ -738,8 +771,8 @@ export default class App extends React.Component {
   requestHandoff = () => {
     const note = this.state.handbackNote
     const partner = this.state.partner
+    this.closeShift()
     this.setState(s => ({
-      shiftOpen: false,
       serverShift: { id: -3, state: 'requested', requester_id: s.me?.id, note, requested_at: Date.now() },
       toast: (partner?.name || 'Your partner') + ' will get your handoff ask', lastAdded: null,
     }), () => this.bumpToast())
@@ -994,7 +1027,16 @@ export default class App extends React.Component {
   }
   bumpToast() {
     if (this._to) clearTimeout(this._to)
-    this._to = setTimeout(() => this.setState({ toast: null, lastAdded: null }), 6000)
+    if (this._toGone) { clearTimeout(this._toGone); this._toGone = null }
+    this.setState({ toastLeaving: false })
+    // fade out before unmounting; the text stays in state until the fade ends
+    this._to = setTimeout(() => {
+      this.setState({ toastLeaving: true })
+      this._toGone = setTimeout(() => {
+        this._toGone = null
+        this.setState({ toast: null, lastAdded: null, toastLeaving: false })
+      }, reduceMotion() ? 0 : 220)
+    }, 6000)
   }
   markDeleted(id) {
     this.setState(s => ({
@@ -1004,7 +1046,7 @@ export default class App extends React.Component {
   }
   undo = () => {
     const id = this.state.lastAdded
-    this.setState({ toast: null, lastAdded: null })
+    this.setState({ toast: null, toastLeaving: false, lastAdded: null })
     if (id) this.markDeleted(id)
   }
   edit = id => () => {
@@ -1272,7 +1314,9 @@ export default class App extends React.Component {
     ]
     const reqMins = sh?.requested_at ? Math.round((Date.now() - sh.requested_at) / 60000) : 0
 
-    const showReport = s.shiftOpen && completed && sh.id !== s.dismissedShiftId
+    // shiftUp keeps the sheet's content stable while it slides away
+    const shiftUp = s.shiftOpen || s.shiftLeaving
+    const showReport = shiftUp && completed && sh.id !== s.dismissedShiftId
     const iHandedBack = completed && me && sh.user_id === me.id
     const noteShown = completed ? (sh.handback_note || s.handbackNote) : s.handbackNote
 
@@ -1369,7 +1413,7 @@ export default class App extends React.Component {
       timerWho: at ? (at.user_id === me?.id ? 'You' : partnerName) : '',
       stopTimer: this.stopTimer,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
-      editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '',
+      editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '', toastLeaving: s.toastLeaving,
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
 
       handoffRows,
@@ -1390,9 +1434,9 @@ export default class App extends React.Component {
         return { label: u, onTap: () => this.setState({ until: u }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
       theirShiftLine: completed ? (partnerName + ' has been on since ' + this.clock(sh.ended_at)) : (partnerName + ' has ' + (s.babyName || 'the baby') + ' right now'),
-      shiftOpen: s.shiftOpen,
-      sheetTheirs: s.shiftOpen && !iAmOnDuty && !showReport,
-      sheetMine: s.shiftOpen && iAmOnDuty && !showReport,
+      shiftMounted: shiftUp, shiftShown: s.shiftOpen && s.shiftIn,
+      sheetTheirs: shiftUp && !iAmOnDuty && !showReport,
+      sheetMine: shiftUp && iAmOnDuty && !showReport,
       sheetReport: showReport,
       reportTitle: iHandedBack ? partnerName + '’s back on' : (partnerName + ' handed back'),
       openShift: this.openShift, closeShift: this.closeShift, acceptShift: this.acceptShift, handBack: this.handBack, addPlanFeed: this.addPlanFeed,
@@ -2218,7 +2262,11 @@ export default class App extends React.Component {
         )}
 
         {v.toast && (
-          <div style={S('position:absolute;left:16px;right:16px;bottom:126px;background:#26231D;border-radius:999px;padding:11px 10px 11px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,0.25);z-index:30')}>
+          <div className="toast-in" style={{
+            ...S('position:absolute;left:16px;right:16px;bottom:126px;background:#26231D;border-radius:999px;padding:11px 10px 11px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,0.25);z-index:30;transition:opacity 0.22s ease'),
+            opacity: v.toastLeaving ? 0 : 1,
+            pointerEvents: v.toastLeaving ? 'none' : 'auto',
+          }}>
             <div style={S('flex:1;min-width:0;font-size:14px;color:#FAF6EF')}>{v.toastText}</div>
             <button type="button" onClick={v.undo} style={S("background:rgba(250,246,239,0.16);border:none;border-radius:999px;padding:7px 14px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#FAF6EF;cursor:pointer")}>Undo</button>
           </div>
@@ -2340,10 +2388,14 @@ export default class App extends React.Component {
           </div>
         )}
 
-        {v.shiftOpen && (
-          <div style={S('position:absolute;inset:0;z-index:50')}>
-            <div onClick={v.closeShift} style={S('position:absolute;inset:0;background:rgba(30,27,20,0.42);backdrop-filter:blur(2px)')} />
-            <div style={S('position:absolute;left:0;right:0;bottom:0;background:#FAF6EF;border-radius:34px 34px 0 0;padding:10px 16px 22px;box-shadow:0 -12px 40px rgba(0,0,0,0.18);max-height:min(760px, 88dvh);overflow:auto')}>
+        {v.shiftMounted && (
+          <div style={{ ...S('position:absolute;inset:0;z-index:50'), pointerEvents: v.shiftShown ? 'auto' : 'none' }}>
+            <div onClick={v.closeShift} style={{ ...S('position:absolute;inset:0;background:rgba(30,27,20,0.42);backdrop-filter:blur(2px);transition:opacity 0.3s ease'), opacity: v.shiftShown ? 1 : 0 }} />
+            <div style={{
+              ...S('position:absolute;left:0;right:0;bottom:0;background:#FAF6EF;border-radius:34px 34px 0 0;padding:10px 16px 22px;box-shadow:0 -12px 40px rgba(0,0,0,0.18);max-height:min(760px, 88dvh);overflow:auto'),
+              transform: v.shiftShown ? 'translateY(0)' : 'translateY(105%)',
+              transition: 'transform 0.34s cubic-bezier(0.32,0.72,0,1)',
+            }}>
               <div style={S('width:38px;height:4px;border-radius:99px;background:rgba(38,35,29,0.16);margin:0 auto 14px')} />
 
               {v.sheetTheirs && (
