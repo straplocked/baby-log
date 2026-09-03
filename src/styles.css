@@ -1,8 +1,17 @@
+/* theme variables — presets in App.jsx (THEME_ACCENTS / THEME_BGS) override these per household */
+:root {
+  --accent: #7C8C5A;
+  --accent-rgb: 124, 140, 90;
+  --accent-deep: #4A5533;
+  --accent-hover: #6B7A4C;
+  --bg: #FAF6EF;
+}
+
 * { -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
 body { background: #EDE7DC; }
-a { color: #6B7A4C; text-decoration: none; }
-a:hover { color: #55632F; }
+a { color: var(--accent-hover); text-decoration: none; }
+a:hover { color: var(--accent-deep); }
 *::-webkit-scrollbar { width: 0; height: 0; }
 input { font-family: inherit; }
 
@@ -15,7 +24,7 @@ input { font-family: inherit; }
   height: 100dvh;
   overflow: hidden;
   box-sizing: border-box;
-  background: #FAF6EF;
+  background: var(--bg);
   font-family: 'Nunito Sans', system-ui, sans-serif;
   color: #26231D;
   display: flex;
@@ -28,9 +37,9 @@ input { font-family: inherit; }
 }
 
 /* hover states carried over from the comp's style-hover attributes */
-.hov-olive:hover { background: #6B7A4C !important; }
+.hov-olive:hover { background: var(--accent-hover) !important; }
 .hov-cream:hover { background: #F1EBE0 !important; }
 .hov-dark:hover { background: #100E0B !important; }
 .hov-bd:hover { border-color: rgba(38, 35, 29, 0.24) !important; }
 .hov-dim:hover { opacity: 0.7; }
-.hov-row:hover { background: rgba(124, 140, 90, 0.05) !important; }
+.hov-row:hover { background: rgba(var(--accent-rgb), 0.05) !important; }

@@ -103,7 +103,12 @@ class SyncController extends Controller
     /** "Since last …" cards the household can choose to show on the Now screen. */
     private const WIDGETS = ['feeds', 'pump', 'diapers', 'sleep', 'bath', 'meds'];
 
-    /** Household-level preferences (tracking toggles, dismissed nudges, Now-screen widgets). Last write wins. */
+    /** Theme presets — keys only; the client maps them to actual colors. */
+    private const THEME_ACCENTS = ['olive', 'clay', 'rose', 'plum', 'sea', 'denim'];
+
+    private const THEME_BGS = ['cream', 'blush', 'mist', 'sage', 'lilac'];
+
+    /** Household-level preferences (tracking toggles, dismissed nudges, Now-screen widgets, theme). Last write wins. */
     public function setSettings(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -113,6 +118,9 @@ class SyncController extends Controller
             'dismissed.*' => ['string', 'max:30'],
             'widgets' => ['sometimes', 'array', 'max:8'],
             'widgets.*' => ['string', 'max:20'],
+            'theme' => ['sometimes', 'nullable', 'array'],
+            'theme.accent' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_ACCENTS)],
+            'theme.bg' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_BGS)],
         ]);
 
         $household = $request->user()->household;
@@ -129,6 +137,9 @@ class SyncController extends Controller
         if (array_key_exists('widgets', $data)) {
             // keep the client's order, drop unknowns and duplicates
             $settings['widgets'] = array_values(array_unique(array_intersect($data['widgets'], self::WIDGETS)));
+        }
+        if (is_array($data['theme'] ?? null)) {
+            $settings['theme'] = array_intersect_key($data['theme'], array_flip(['accent', 'bg']));
         }
         $household->update(['settings' => $settings]);
 

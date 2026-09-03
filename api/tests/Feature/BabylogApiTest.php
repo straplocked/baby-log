@@ -173,6 +173,22 @@ class BabylogApiTest extends TestCase
         $this->assertSame(['pump', 'feeds'], $settings['widgets']);
     }
 
+    public function test_theme_round_trips_and_rejects_unknown_presets(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $this->postJson('/api/settings', ['theme' => ['accent' => 'clay', 'bg' => 'mist']], $this->authed($ben))->assertOk();
+        $this->assertSame(['accent' => 'clay', 'bg' => 'mist'], $this->getJson('/api/state', $this->authed($ben))->json('settings.theme'));
+
+        // only known preset keys — a free-form hex would bypass the palette
+        $this->postJson('/api/settings', ['theme' => ['accent' => '#FF0000']], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/settings', ['theme' => ['bg' => 'vantablack']], $this->authed($ben))->assertStatus(422);
+
+        // a client that predates themes syncs settings without the key — theme survives
+        $this->postJson('/api/settings', ['tracking' => ['bath' => false]], $this->authed($ben))->assertOk();
+        $this->assertSame('clay', $this->getJson('/api/state', $this->authed($ben))->json('settings.theme.accent'));
+    }
+
     public function test_settings_are_scoped_to_the_household(): void
     {
         config(['babylog.open_registration' => true]);
