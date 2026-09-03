@@ -4,7 +4,7 @@ import Duck from './Duck'
 import { api, getToken, setToken } from './api'
 import { startEcho, stopEcho, isEchoConnected } from './echo'
 import { pushSupported, pushSubscription, subscribePush, deviceTz } from './push'
-import { getFx, setFx, initFx, isDark, askTiltPermission } from './fx'
+import { getFx, setFx, initFx, isDark, askTiltPermission, reduceMotion } from './fx'
 
 // ── domain constants (from design/Baby Log.dc.html) ──────────────────────────
 const TYPES = [
@@ -180,7 +180,7 @@ export default class App extends React.Component {
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       activeTimer: null, timerSide: null, manualDur: false,
-      sheetDragY: 0, sheetDragging: false, sheetTall: false,
+      sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
       toast: null, lastAdded: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
@@ -214,12 +214,19 @@ export default class App extends React.Component {
     this.refreshPush()
     initFx(() => applyTheme(this.state.settings.theme)) // OS scheme / light sensor changes re-resolve dark
     applyTheme(this.state.settings.theme)
+    // Android back gesture closes the sheet (mountSheet pushed the entry);
+    // a stale entry can survive a reload mid-sheet — drop it so back exits
+    this._pop = () => { if (this.state.sheet) this.dismissSheet() }
+    window.addEventListener('popstate', this._pop)
+    if (window.history.state?.blSheet) try { window.history.replaceState(null, '') } catch { /* fine */ }
   }
   componentWillUnmount() {
     clearInterval(this._iv); clearInterval(this._sec); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
     window.removeEventListener('focus', this._wake)
     window.removeEventListener('online', this._wake)
     document.removeEventListener('visibilitychange', this._wake)
+    window.removeEventListener('popstate', this._pop)
+    if (this._sheetTo) clearTimeout(this._sheetTo)
     stopEcho()
   }
 
@@ -382,7 +389,7 @@ export default class App extends React.Component {
       screen: 'splash', authMode: 'signup', authName: '', authEmail: '', authPassword: '', authError: null,
       entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
-      babyName: '', nameField: '', inviteField: '', sheet: false, shiftOpen: false, toast: null,
+      babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false, shiftOpen: false, toast: null,
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
@@ -601,9 +608,9 @@ export default class App extends React.Component {
       // pumping needs the amount — open the sheet (manual mode) with the timed duration filled in
       this._base = t.started_at
       const last = this.lastOf(['pump'])
-      this.setState({
-        sheet: true, editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true,
-        detail: last ? (dSplit(last.detail).n ?? 4) : 4, detail2: mins, sheetTall: false, sheetDragY: 0, timerSide: null,
+      this.mountSheet({
+        editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true,
+        detail: last ? (dSplit(last.detail).n ?? 4) : 4, detail2: mins, timerSide: null,
       })
     }
   }
@@ -682,7 +689,7 @@ export default class App extends React.Component {
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.setState({ sheet: true, editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, sheetTall: false, sheetDragY: 0, manualDur: false })
+    this.mountSheet({ editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, manualDur: false })
   }
   defaultDetail(k) {
     const d = T(k).detail
@@ -709,7 +716,33 @@ export default class App extends React.Component {
     if (type === 'pump') return { detail: n, detail2: mins }
     return { detail: d, detail2: null }
   }
-  closeSheet = () => this.setState({ sheet: false, sheetTall: false, sheetDragY: 0, sheetDragging: false })
+  // every sheet opening routes through here: slide-up entrance (mount off-screen,
+  // then translate home two frames later) plus a history entry so the Android
+  // back gesture dismisses the sheet instead of exiting the app
+  mountSheet = fields => {
+    if (this._sheetTo) { clearTimeout(this._sheetTo); this._sheetTo = null }
+    if (!this.state.sheet && !window.history.state?.blSheet) {
+      try { window.history.pushState({ blSheet: true }, '') } catch { /* history blocked — back just exits */ }
+    }
+    this.setState({ sheet: true, sheetLeaving: false, sheetIn: reduceMotion(), sheetTall: false, sheetDragY: 0, sheetDragging: false, ...fields })
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (this.state.sheet) this.setState({ sheetIn: true })
+    }))
+  }
+  closeSheet = () => {
+    // consume our history entry when it's on top; the popstate runs the
+    // animated close, same as a native back gesture would
+    if (this.state.sheet && window.history.state?.blSheet) return window.history.back()
+    this.dismissSheet()
+  }
+  dismissSheet = () => {
+    if (!this.state.sheet) return
+    this.setState({ sheet: false, sheetLeaving: true, sheetIn: false, sheetDragY: 0, sheetDragging: false })
+    this._sheetTo = setTimeout(() => {
+      this._sheetTo = null
+      this.setState({ sheetLeaving: false, sheetTall: false })
+    }, reduceMotion() ? 0 : 340)
+  }
   // handle gestures: drag down dismisses, drag up expands, from tall a short down-drag collapses
   sheetDragStart = e => {
     this._sheetDrag = { y0: e.clientY, lastY: e.clientY, lastT: Date.now(), vel: 0 }
@@ -728,10 +761,37 @@ export default class App extends React.Component {
     this._sheetDrag = null
     const dy = this.state.sheetDragY, vel = d.vel
     const reset = { sheetDragY: 0, sheetDragging: false }
-    if (dy > 110 || (dy > 30 && vel > 0.55)) { this.setState(reset); return this.closeSheet() }
+    // leave the drag state alone on dismiss — the sheet holds its dragged spot
+    // until the (async) animated close carries it the rest of the way down
+    if (dy > 110 || (dy > 30 && vel > 0.55)) return this.closeSheet()
     if (dy < -40 || vel < -0.55) return this.setState({ ...reset, sheetTall: true })
     if (this.state.sheetTall && dy > 40) return this.setState({ ...reset, sheetTall: false })
     this.setState(reset)
+  }
+  // native-sheet gesture: a touch pull-down on the content works like the
+  // handle, but only when the content is scrolled to the top and the touch
+  // didn't start on a control (buttons scrub/tap; native scroll keeps pan-y)
+  sheetBodyDown = e => {
+    if (e.pointerType === 'mouse' || e.target.closest?.('button, input, label')) { this._bodyDrag = null; return }
+    this._bodyDrag = { y0: e.clientY, el: e.currentTarget, active: false }
+  }
+  sheetBodyMove = e => {
+    const b = this._bodyDrag; if (!b) return
+    if (!b.active) {
+      const dy = e.clientY - b.y0
+      if (b.el.scrollTop > 0 || dy < -6) { this._bodyDrag = null; return }
+      if (dy < 10) return
+      b.active = true
+      try { b.el.setPointerCapture(e.pointerId) } catch { /* drag still tracks */ }
+      // re-base at the activation point so the sheet doesn't jump by the slop
+      this._sheetDrag = { y0: e.clientY, lastY: e.clientY, lastT: Date.now(), vel: 0 }
+      this.setState({ sheetDragging: true })
+    }
+    this.sheetDragMove(e)
+  }
+  sheetBodyUp = () => {
+    if (this._bodyDrag?.active) this.sheetDragEnd()
+    this._bodyDrag = null
   }
   pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k), detail2: s.sel === k ? s.detail2 : this.defaultDetail2(k) }))
   // ── chip scrub: tap picks the preset, drag up/down dials a custom value ────
@@ -775,10 +835,10 @@ export default class App extends React.Component {
   save = () => {
     const key = this.state.sel || this.predict() || 'bottle'
     const t = this.stamp(), detail = this.composeDetail(key)
+    this.closeSheet()
     if (this.state.editId) {
       const id = this.state.editId
       this.setState(s => ({
-        sheet: false,
         entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e),
         outbox: [...new Set([...s.outbox, id])],
         toast: 'Entry updated', lastAdded: null,
@@ -786,7 +846,7 @@ export default class App extends React.Component {
     } else {
       const entry = { id: uuid(), type: key, t, detail, by: this.state.me?.id }
       this.setState(s => ({
-        sheet: false, screen: 'home',
+        screen: 'home',
         entries: [entry, ...s.entries],
         outbox: [...s.outbox, entry.id],
         toast: T(key).label + ' logged · ' + this.clock(t), lastAdded: entry.id,
@@ -812,11 +872,12 @@ export default class App extends React.Component {
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
     this._base = e.t
-    this.setState({ sheet: true, editId: id, sel: e.type, offset: 0, pickedT: null, sheetTall: false, sheetDragY: 0, ...this.decompose(e.type, e.detail) })
+    this.mountSheet({ editId: id, sel: e.type, offset: 0, pickedT: null, ...this.decompose(e.type, e.detail) })
   }
   remove = () => {
     const id = this.state.editId
-    this.setState({ sheet: false, toast: 'Entry deleted', lastAdded: null })
+    this.closeSheet()
+    this.setState({ toast: 'Entry deleted', lastAdded: null })
     if (id) this.markDeleted(id)
     this.bumpToast()
   }
@@ -1098,6 +1159,8 @@ export default class App extends React.Component {
       offline: s.offline,
 
       sheetOpen: s.sheet,
+      sheetMounted: s.sheet || s.sheetLeaving, sheetShown: s.sheet && s.sheetIn,
+      sheetBodyDown: this.sheetBodyDown, sheetBodyMove: this.sheetBodyMove, sheetBodyUp: this.sheetBodyUp,
       sheetTranslate: s.sheetDragY > 0 ? s.sheetDragY : (s.sheetTall ? Math.max(s.sheetDragY / 4, -18) : Math.max(s.sheetDragY / 2, -46)),
       sheetDragging: s.sheetDragging, sheetTall: s.sheetTall,
       sheetDragStart: this.sheetDragStart, sheetDragMove: this.sheetDragMove, sheetDragEnd: this.sheetDragEnd,
@@ -1904,14 +1967,14 @@ export default class App extends React.Component {
           </div>
         )}
 
-        {v.sheetOpen && (
-          <div style={S('position:absolute;inset:0;z-index:40')}>
-            <div onClick={v.closeSheet} style={S('position:absolute;inset:0;background:rgba(30,27,20,0.42);backdrop-filter:blur(2px)')} />
+        {v.sheetMounted && (
+          <div style={{ ...S('position:absolute;inset:0;z-index:40'), pointerEvents: v.sheetShown ? 'auto' : 'none' }}>
+            <div onClick={v.closeSheet} style={{ ...S('position:absolute;inset:0;background:rgba(30,27,20,0.42);backdrop-filter:blur(2px);transition:opacity 0.3s ease'), opacity: v.sheetShown ? 1 : 0 }} />
             <div style={{
               ...S('position:absolute;left:0;right:0;bottom:0;background:#FAF6EF;border-radius:34px 34px 0 0;padding:10px 16px 22px;box-shadow:0 -12px 40px rgba(0,0,0,0.18);overflow:hidden;max-height:92vh;display:flex;flex-direction:column'),
               height: v.sheetTall ? '86vh' : 'auto',
-              transform: `translateY(${v.sheetTranslate}px)`,
-              transition: v.sheetDragging ? 'none' : 'transform 0.28s cubic-bezier(0.32,0.72,0,1)',
+              transform: v.sheetShown ? `translateY(${v.sheetTranslate}px)` : 'translateY(105%)',
+              transition: v.sheetDragging ? 'none' : 'transform 0.34s cubic-bezier(0.32,0.72,0,1)',
             }}>
               <div style={S('position:absolute;inset:0;z-index:0')}>
                 <img className="bg-art" src="/art/sheet-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
@@ -1921,7 +1984,8 @@ export default class App extends React.Component {
                 style={S('position:relative;z-index:1;flex-shrink:0;padding:13px 0 13px;margin:-10px -16px 0;cursor:grab;touch-action:none')}>
                 <div style={S('width:38px;height:4px;border-radius:99px;background:rgba(38,35,29,0.16);margin:0 auto')} />
               </div>
-              <div style={S('position:relative;z-index:1;flex:1;min-height:0;overflow:auto')}>
+              <div onPointerDown={v.sheetBodyDown} onPointerMove={v.sheetBodyMove} onPointerUp={v.sheetBodyUp} onPointerCancel={v.sheetBodyUp}
+                style={S('position:relative;z-index:1;flex:1;min-height:0;overflow:auto;touch-action:pan-y;overscroll-behavior:contain')}>
 
                 {v.showStamp && (
                 <div style={S('display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px 12px')}>

@@ -62,7 +62,7 @@ function startAmbient() {
 // Writes unitless --par-x/--par-y (−1…1) onto <html>; .fx-layer in styles.css
 // turns them into per-depth translations. Phone tilt drives it where device
 // orientation exists; the pointer is the desktop fallback.
-const reduceMotion = () => {
+export const reduceMotion = () => {
   try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
 }
 let tiltBound = false
