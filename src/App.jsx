@@ -61,7 +61,6 @@ const sessionStarts = ts => { // ts ascending → first feed of each session
 }
 // duration quick-select: a few presets, and dragging a chip up/down scrubs a
 // custom value along this ladder — fine steps for short naps, coarser as hours stack
-const DUR_PRESETS = { dur: [30, 45, 90], mins: [10, 20, 30] }
 const DUR_LADDER = (() => {
   const a = []
   for (let v = 5; v < 60; v += 5) a.push(v)
@@ -69,9 +68,17 @@ const DUR_LADDER = (() => {
   for (let v = 180; v <= 720; v += 30) a.push(v)
   return a
 })()
-const ladderIdx = v => {
+// ounces run in halves — the same 0.5 steps the old chip row offered, just scrubbable
+const OZ_LADDER = Array.from({ length: 24 }, (_, i) => (i + 1) / 2)
+// every scrubbable chip kind: a few tap presets, and the ladder a drag walks along
+const SCRUB = {
+  dur:  { presets: [30, 45, 90], ladder: DUR_LADDER },
+  mins: { presets: [10, 20, 30], ladder: DUR_LADDER },
+  oz:   { presets: [3, 4, 5],    ladder: OZ_LADDER },
+}
+const ladderIdx = (ladder, v) => {
   let best = 0
-  for (let i = 1; i < DUR_LADDER.length; i++) if (Math.abs(DUR_LADDER[i] - v) < Math.abs(DUR_LADDER[best] - v)) best = i
+  for (let i = 1; i < ladder.length; i++) if (Math.abs(ladder[i] - v) < Math.abs(ladder[best] - v)) best = i
   return best
 }
 const OLIVE = 'var(--accent)'
@@ -170,7 +177,7 @@ export default class App extends React.Component {
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
       inviteCode: null,
       entries: [], // includes tombstones ({deleted:true}); views filter them
-      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, durDrag: null,
+      sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       activeTimer: null, timerSide: null, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false,
       toast: null, lastAdded: null,
@@ -723,29 +730,32 @@ export default class App extends React.Component {
     this.setState(reset)
   }
   pick = k => () => this.setState(s => ({ sel: k, detail: s.sel === k ? s.detail : this.defaultDetail(k), detail2: s.sel === k ? s.detail2 : this.defaultDetail2(k) }))
-  // ── duration scrub: tap picks the preset, drag up/down dials a custom value ─
-  durDragStart = (field, base) => e => {
-    this._durDrag = { field, base, y0: e.clientY, moved: false, idx0: ladderIdx(base) }
+  // ── chip scrub: tap picks the preset, drag up/down dials a custom value ────
+  // shared by durations and ounces — `key` picks the ladder the drag walks
+  scrubStart = (field, key, base) => e => {
+    const ladder = SCRUB[key].ladder
+    this._scrub = { field, key, base, y0: e.clientY, moved: false, idx0: ladderIdx(ladder, base) }
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* drag still tracks */ }
   }
-  durDragMove = e => {
-    const d = this._durDrag
+  scrubMove = e => {
+    const d = this._scrub
     if (!d) return
-    const dy = d.y0 - e.clientY // up = longer, like pulling a value out of the chip
+    const dy = d.y0 - e.clientY // up = more, like pulling a value out of the chip
     if (!d.moved && Math.abs(dy) < 7) return
     d.moved = true
-    const i = Math.max(0, Math.min(DUR_LADDER.length - 1, d.idx0 + Math.round(dy / 14)))
-    const val = DUR_LADDER[i]
-    if (this.state.durDrag?.val !== val) this.setState({ durDrag: { field: d.field, base: d.base, val } })
+    const ladder = SCRUB[d.key].ladder
+    const i = Math.max(0, Math.min(ladder.length - 1, d.idx0 + Math.round(dy / 14)))
+    const val = ladder[i]
+    if (this.state.scrubDrag?.val !== val) this.setState({ scrubDrag: { field: d.field, base: d.base, val } })
   }
-  durDragEnd = () => {
-    const d = this._durDrag
-    this._durDrag = null
+  scrubEnd = () => {
+    const d = this._scrub
+    this._scrub = null
     if (!d) return
-    const val = d.moved ? this.state.durDrag?.val : null
-    if (val != null) this.setState({ [d.field]: val, durDrag: null })
-    else if (d.field === 'detail2') this.setState(s => ({ detail2: s.detail2 === d.base ? null : d.base, durDrag: null })) // tap toggles, as before
-    else this.setState({ detail: d.base, durDrag: null })
+    const val = d.moved ? this.state.scrubDrag?.val : null
+    if (val != null) this.setState({ [d.field]: val, scrubDrag: null })
+    else if (d.field === 'detail2') this.setState(s => ({ detail2: s.detail2 === d.base ? null : d.base, scrubDrag: null })) // tap toggles, as before
+    else this.setState({ detail: d.base, scrubDrag: null })
   }
   nudge = n => () => this.setState({ offset: n, pickedT: null })
   pickTime = e => {
@@ -903,28 +913,29 @@ export default class App extends React.Component {
       .map(d => ({ label: d.label, onTap: this.nudge(d.n), ...this.chip(s.pickedT == null && s.offset === d.n, OLIVE) }))
 
     const kind = st.detail
-    // duration chips: few presets, the current custom value sorted in as its own
-    // chip, and the chip under a drag showing the live scrubbed value
-    const durChips = (field, key) => {
+    // scrubbable chips: few presets, the current custom value sorted in as its
+    // own chip, and the chip under a drag showing the live scrubbed value
+    const scrubChips = (field, key) => {
       const cur = s[field] != null && !Number.isNaN(Number(s[field])) ? Number(s[field]) : null
-      const vals = [...DUR_PRESETS[key]]
+      const vals = [...SCRUB[key].presets]
       if (cur != null && !vals.includes(cur)) vals.push(cur)
       vals.sort((a, b) => a - b)
-      const drag = s.durDrag && s.durDrag.field === field ? s.durDrag : null
+      const drag = s.scrubDrag && s.scrubDrag.field === field ? s.scrubDrag : null
+      const fmt = v => key === 'oz' ? v + ' ' + this.unit() : this.dur(v)
       return vals.map(dv => {
         const dragging = !!drag && drag.base === dv
         const on = dragging || (!drag && cur === dv)
-        return { label: this.dur(dragging ? drag.val : dv), scrub: true, on,
-          onDown: this.durDragStart(field, dv), ...this.chip(on, st.color) }
+        return { label: fmt(dragging ? drag.val : dv), scrub: true, on,
+          onDown: this.scrubStart(field, key, dv), ...this.chip(on, st.color) }
       })
     }
-    const opts = kind === 'amount' ? [2, 2.5, 3, 3.5, 4, 4.5, 5].map(v => ({ v, label: v + ' ' + this.unit() }))
-      : kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v })) : []
-    const detailOptions = kind === 'dur' ? durChips('detail', 'dur')
+    const opts = kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v })) : []
+    const detailOptions = kind === 'dur' ? scrubChips('detail', 'dur')
+      : kind === 'amount' ? scrubChips('detail', 'oz')
       : opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
     const kind2 = st.key === 'bottle' ? 'milk' : st.key === 'nurse' || st.key === 'pump' ? 'mins' : null
     const opts2 = kind2 === 'milk' ? [{ v: 'breastmilk', label: 'Breast milk' }, { v: 'formula', label: 'Formula' }] : []
-    const detail2Options = kind2 === 'mins' ? durChips('detail2', 'mins')
+    const detail2Options = kind2 === 'mins' ? scrubChips('detail2', 'mins')
       : opts2.map(o => ({ label: o.label, onTap: () => this.setState(x => ({ detail2: x.detail2 === o.v ? null : o.v })), ...this.chip(s.detail2 === o.v, st.color) }))
     const detailStr = (kind === 'amount' ? (s.detail != null ? ' ' + s.detail + ' ' + this.unit() : '') : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : '')
       + (s.detail2 != null ? (kind2 === 'milk' ? ' · ' + (s.detail2 === 'formula' ? 'formula' : 'breast milk') : ' · ' + this.dur(s.detail2)) : '')
@@ -1095,7 +1106,7 @@ export default class App extends React.Component {
       nudges, types,
       hasDetail: !!kind && !timerFirst, detailLabel: kind === 'amount' ? 'Amount' : kind === 'side' ? 'Side' : 'Duration', detailOptions,
       hasDetail2: !!kind2 && !timerFirst, detail2Label: kind2 === 'milk' ? 'Milk' : 'Duration', detail2Options,
-      durDragMove: this.durDragMove, durDragEnd: this.durDragEnd,
+      scrubMove: this.scrubMove, scrubEnd: this.scrubEnd,
       showStamp: !timerFirst,
       timerFirst,
       startTimerLabel: 'Start ' + (st.key === 'nurse' ? 'nursing' : 'pumping'),
@@ -1952,7 +1963,7 @@ export default class App extends React.Component {
                   <div style={S('display:flex;align-items:center;gap:8px;padding:14px 2px 0;overflow:auto')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detailLabel}</div>
                     {v.detailOptions.map((d, i) => d.scrub ? (
-                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.durDragMove} onPointerUp={v.durDragEnd} onPointerCancel={v.durDragEnd}
+                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.scrubMove} onPointerUp={v.scrubEnd} onPointerCancel={v.scrubEnd}
                         style={S(`flex-shrink:0;display:flex;align-items:center;gap:3px;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:ns-resize;touch-action:pan-x;user-select:none`)}>
                         {d.label}
                         {d.on && <Sym style={{ fontSize: 12, color: d.fg, opacity: 0.7 }}>unfold_more</Sym>}
@@ -1967,7 +1978,7 @@ export default class App extends React.Component {
                   <div style={S('display:flex;align-items:center;gap:8px;padding:10px 2px 0;overflow:auto')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>{v.detail2Label}</div>
                     {v.detail2Options.map((d, i) => d.scrub ? (
-                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.durDragMove} onPointerUp={v.durDragEnd} onPointerCancel={v.durDragEnd}
+                      <button key={i} type="button" onPointerDown={d.onDown} onPointerMove={v.scrubMove} onPointerUp={v.scrubEnd} onPointerCancel={v.scrubEnd}
                         style={S(`flex-shrink:0;display:flex;align-items:center;gap:3px;background:${d.bg};border:1px solid ${d.border};border-radius:999px;padding:8px 13px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${d.fg};cursor:ns-resize;touch-action:pan-x;user-select:none`)}>
                         {d.label}
                         {d.on && <Sym style={{ fontSize: 12, color: d.fg, opacity: 0.7 }}>unfold_more</Sym>}
