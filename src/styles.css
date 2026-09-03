@@ -1,15 +1,53 @@
-/* theme variables — presets in App.jsx (THEME_ACCENTS / THEME_BGS) override these per household */
+/* theme variables — light defaults here; html.dark flips the neutrals, and
+   applyTheme() in App.jsx layers the household accent/background on top as
+   inline properties. S() (src/s.js) maps the comp's fixed palette onto these
+   vars, so comp markup strings stay verbatim yet follow the theme. */
 :root {
   --accent: #7C8C5A;
   --accent-rgb: 124, 140, 90;
   --accent-deep: #4A5533;
   --accent-hover: #6B7A4C;
+  --accent-text: #5F6E42;
   --bg: #FAF6EF;
+  --bg-rgb: 250, 246, 239;
+  --surface: #FFFDF8;
+  --hov-surface: #F1EBE0;
+  --ink: #26231D;
+  --ink-rgb: 38, 35, 29;
+  --ink2: #3D392F;
+  --ink3: #4E4A3F;
+  --muted: #6E6659;
+  --soft: #8C8474;
+  --faint2: #A79E8B;
+  --faint: #B5AC98;
+  --dim: #CFC7B4;
+  --on-accent: #FCFBF6;
+  --warn: #A85A45;
+  --frame: #EDE7DC;
+  --par-x: 0;
+  --par-y: 0;
+}
+html.dark {
+  --bg: #1E1B16;
+  --bg-rgb: 30, 27, 22;
+  --surface: color-mix(in oklab, var(--bg) 90%, #EDE8DE);
+  --hov-surface: color-mix(in oklab, var(--bg) 82%, #EDE8DE);
+  --ink: #EDE8DE;
+  --ink-rgb: 237, 232, 222;
+  --ink2: #E0DACD;
+  --ink3: #CEC7B8;
+  --muted: #A8A091;
+  --soft: #948C7D;
+  --faint2: #7E7669;
+  --faint: #746C5F;
+  --dim: #514B41;
+  --warn: #D08069;
+  --frame: #0C0B09;
 }
 
 * { -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
-body { background: #EDE7DC; }
+body { background: var(--frame); }
 a { color: var(--accent-hover); text-decoration: none; }
 a:hover { color: var(--accent-deep); }
 *::-webkit-scrollbar { width: 0; height: 0; }
@@ -26,7 +64,7 @@ input { font-family: inherit; }
   box-sizing: border-box;
   background: var(--bg);
   font-family: 'Nunito Sans', system-ui, sans-serif;
-  color: #26231D;
+  color: var(--ink);
   display: flex;
   flex-direction: column;
   padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
@@ -34,12 +72,30 @@ input { font-family: inherit; }
 }
 @media (min-width: 431px) {
   .app { box-shadow: 0 0 0 1px rgba(38, 35, 29, 0.08), 0 24px 60px rgba(38, 35, 29, 0.14); }
+  html.dark .app { box-shadow: 0 0 0 1px rgba(237, 232, 222, 0.10), 0 24px 60px rgba(0, 0, 0, 0.5); }
 }
+
+/* parallax layers — fx.js eases --par-x/--par-y from device tilt (or pointer);
+   each depth drifts a different distance so the background gains parallax */
+.fx-layer {
+  transform: translate3d(calc(var(--par-x) * var(--fx-depth, 0px)), calc(var(--par-y) * var(--fx-depth, 0px)), 0);
+  will-change: transform;
+}
+.fx-far { --fx-depth: 9px; }
+.fx-mid { --fx-depth: 18px; }
+.fx-near { --fx-depth: 30px; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-layer { transform: none; }
+}
+
+/* the cream illustrations glare on a dark backdrop — dim, don't swap assets */
+html.dark .bg-art { filter: brightness(0.42) saturate(0.85); }
 
 /* hover states carried over from the comp's style-hover attributes */
 .hov-olive:hover { background: var(--accent-hover) !important; }
-.hov-cream:hover { background: #F1EBE0 !important; }
+.hov-cream:hover { background: var(--hov-surface) !important; }
 .hov-dark:hover { background: #100E0B !important; }
-.hov-bd:hover { border-color: rgba(38, 35, 29, 0.24) !important; }
+html.dark .hov-dark:hover { background: #FBF7EF !important; } /* ink buttons invert in dark */
+.hov-bd:hover { border-color: rgba(var(--ink-rgb), 0.24) !important; }
 .hov-dim:hover { opacity: 0.7; }
 .hov-row:hover { background: rgba(var(--accent-rgb), 0.05) !important; }

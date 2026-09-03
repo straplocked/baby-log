@@ -16,6 +16,7 @@ Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed
 - The visual source of truth is the comp in `design/Baby Log.dc.html`. App markup keeps the comp's inline CSS strings verbatim via `S()` from [src/s.js](src/s.js) — when changing styles, edit the string, don't convert to style objects. Hover states are utility classes in [src/styles.css](src/styles.css).
 - Palette: cream `#FAF6EF`/`#FFFDF8`, ink `#26231D`, olive `#7C8C5A` (primary), type colors via `oklch(0.60 0.075 <hue>)`. Fonts: Nunito (display), Nunito Sans (body), Material Symbols Rounded (icons, ligature names).
 - New UI should read like the comp: 999px pills, 24–26px card radii, `rgba(38,35,29,…)` hairlines.
+- **Theming**: `S()` rewrites the comp's fixed palette to CSS variables (`--surface`, `--ink`, `--ink-rgb`…) at parse time — comp hexes in `S()` strings auto-follow the household theme and dark mode. Colors in JS style objects/computed props bypass `S()`, so write `var(--…)` there directly. Light values + the `html.dark` flip live in [src/styles.css](src/styles.css); dark mode & tilt parallax are per-device prefs in [src/fx.js](src/fx.js) (`babylog:fx`), never synced household settings.
 
 ## Sync rules (don't break these)
 

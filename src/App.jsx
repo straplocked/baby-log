@@ -4,6 +4,7 @@ import Duck from './Duck'
 import { api, getToken, setToken } from './api'
 import { startEcho, stopEcho, isEchoConnected } from './echo'
 import { pushSupported, pushSubscription, subscribePush, deviceTz } from './push'
+import { getFx, setFx, initFx, isDark, askTiltPermission } from './fx'
 
 // ── domain constants (from design/Baby Log.dc.html) ──────────────────────────
 const TYPES = [
@@ -91,25 +92,43 @@ const THEME_ACCENTS = {
   denim: { label: 'Denim', accent: '#6B85B1', rgb: '107,133,177', deep: '#3E506E', hover: '#5B749C' },
 }
 const THEME_BGS = {
-  cream: { label: 'Cream', bg: '#FAF6EF' },
-  blush: { label: 'Blush', bg: '#FDF4F3' },
-  mist: { label: 'Mist', bg: '#F1F8FD' },
-  sage: { label: 'Sage', bg: '#F4F8F1' },
-  lilac: { label: 'Lilac', bg: '#F9F5FC' },
+  cream: { label: 'Cream', bg: '#FAF6EF', rgb: '250,246,239' },
+  blush: { label: 'Blush', bg: '#FDF4F3', rgb: '253,244,243' },
+  mist: { label: 'Mist', bg: '#F1F8FD', rgb: '241,248,253' },
+  sage: { label: 'Sage', bg: '#F4F8F1', rgb: '244,248,241' },
+  lilac: { label: 'Lilac', bg: '#F9F5FC', rgb: '249,245,252' },
+}
+// dark counterparts keep each background's hue at ≈0.23 lightness, so the
+// household's tint survives the flip; neutrals flip in styles.css (html.dark)
+const THEME_BGS_DARK = {
+  cream: { bg: '#1E1B16', rgb: '30,27,22' },
+  blush: { bg: '#211A1B', rgb: '33,26,27' },
+  mist: { bg: '#171C20', rgb: '23,28,32' },
+  sage: { bg: '#191D16', rgb: '25,29,22' },
+  lilac: { bg: '#1D1A21', rgb: '29,26,33' },
 }
 let appliedThemeSig = null
 function applyTheme(theme) {
   const a = THEME_ACCENTS[theme?.accent] || THEME_ACCENTS.olive
-  const b = THEME_BGS[theme?.bg] || THEME_BGS.cream
+  const bKey = THEME_BGS[theme?.bg] ? theme.bg : 'cream'
+  const dark = isDark()
+  const b = dark ? THEME_BGS_DARK[bKey] : THEME_BGS[bKey]
   const sig = a.accent + b.bg
   if (appliedThemeSig === sig) return
   appliedThemeSig = sig
-  const r = document.documentElement.style
+  const el = document.documentElement
+  el.classList.toggle('dark', dark)
+  el.style.colorScheme = dark ? 'dark' : 'light'
+  const r = el.style
   r.setProperty('--accent', a.accent)
   r.setProperty('--accent-rgb', a.rgb)
-  r.setProperty('--accent-deep', a.deep)
-  r.setProperty('--accent-hover', a.hover)
+  // accent text roles re-derive against the flipped neutrals: "deep" must be
+  // the readable end, so in dark it mixes toward cream instead of black
+  r.setProperty('--accent-deep', dark ? `color-mix(in oklab, ${a.accent} 58%, #F2EDE2)` : a.deep)
+  r.setProperty('--accent-hover', dark ? `color-mix(in oklab, ${a.accent} 84%, #14120F)` : a.hover)
+  r.setProperty('--accent-text', dark ? `color-mix(in oklab, ${a.accent} 68%, #F2EDE2)` : `color-mix(in oklab, ${a.accent} 74%, #26231D)`)
   r.setProperty('--bg', b.bg)
+  r.setProperty('--bg-rgb', b.rgb)
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.content = b.bg
 }
@@ -162,6 +181,7 @@ export default class App extends React.Component {
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
       shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
+      fx: getFx(), // device-local (babylog:fx), not in PERSIST
     }
     const saved = loadSaved()
     if (saved) for (const k of PERSIST) if (k in saved) this.state[k] = saved[k]
@@ -184,6 +204,7 @@ export default class App extends React.Component {
     document.addEventListener('visibilitychange', this._wake)
     if (getToken()) this.sync()
     this.refreshPush()
+    initFx(() => applyTheme(this.state.settings.theme)) // OS scheme / light sensor changes re-resolve dark
     applyTheme(this.state.settings.theme)
   }
   componentWillUnmount() {
@@ -502,6 +523,14 @@ export default class App extends React.Component {
     settings: { ...s.settings, theme: { ...(s.settings.theme || {}), ...patch } },
     settingsDirty: true,
   }), () => this.flushSoon())
+  // theme mode & tilt are per-phone (fx.js), not household settings — the
+  // night-shift parent going dark shouldn't flip their partner's screen
+  setFxMode = mode => this.setState({ fx: setFx({ mode }) })
+  toggleTilt = async () => {
+    const on = !this.state.fx.tilt
+    if (on) await askTiltPermission() // iOS wants the request inside this tap
+    this.setState({ fx: setFx({ tilt: on }) })
+  }
   feedGap() {
     // rhythm runs between session starts — cluster feeds don't count as new beats
     const t = this.live().filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b)
@@ -779,8 +808,8 @@ export default class App extends React.Component {
   }
 
   chip(on, tone) {
-    return on ? { bg: tone || '#26231D', border: tone || '#26231D', fg: '#FAF6EF' }
-              : { bg: '#FFFDF8', border: 'rgba(38,35,29,0.12)', fg: '#6E6659' }
+    return on ? { bg: tone || 'var(--ink)', border: tone || 'var(--ink)', fg: 'var(--bg)' }
+              : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }
   }
   bars(keys, color) {
     const out = []
@@ -982,8 +1011,8 @@ export default class App extends React.Component {
         sub: done ? 'logged ' + this.clock(p.hit.t) + (p.hit.detail && FEEDS.includes(p.hit.type) ? ' · ' + (this.fmtDetail(p.hit.detail) || p.hit.detail) : '') : isNext ? (late ? 'running ' + rel + ' late' : 'next up') : 'later',
         when: done ? 'done' : late ? 'now' : 'in ' + rel,
         stateIcon: done ? 'check_circle' : isNext ? 'schedule' : 'radio_button_unchecked',
-        stateColor: done ? 'var(--accent)' : isNext ? (late ? '#A85A45' : 'var(--accent-deep)') : '#CFC7B4',
-        textColor: done ? '#8C8474' : '#26231D', whenColor: done ? '#8C8474' : late ? '#A85A45' : 'var(--accent-deep)',
+        stateColor: done ? 'var(--accent)' : isNext ? (late ? 'var(--warn)' : 'var(--accent-deep)') : 'var(--dim)',
+        textColor: done ? 'var(--soft)' : 'var(--ink)', whenColor: done ? 'var(--soft)' : late ? 'var(--warn)' : 'var(--accent-deep)',
       }
     })
     const nextRow = planRows.find(r => r.stateIcon === 'schedule')
@@ -994,7 +1023,7 @@ export default class App extends React.Component {
     const requestPlanRows = draft.map(p => {
       const off = s.planOff.includes(p.id)
       return { icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p), time: '~' + this.clock(p.at),
-        toggleIcon: off ? 'toggle_off' : 'toggle_on', toggleColor: off ? '#CFC7B4' : 'var(--accent)',
+        toggleIcon: off ? 'toggle_off' : 'toggle_on', toggleColor: off ? 'var(--dim)' : 'var(--accent)',
         onToggle: () => this.setState(st2 => ({ planOff: off ? st2.planOff.filter(x => x !== p.id) : [...st2.planOff, p.id] })) }
     })
     const t1 = this.clock(rhythm[0].at), t2 = rhythm[1] ? this.clock(rhythm[1].at) : ''
@@ -1033,13 +1062,13 @@ export default class App extends React.Component {
       authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
       authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
       socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
-      loginTabBg: s.authMode === 'login' ? '#FFFDF8' : 'transparent', loginTabFg: s.authMode === 'login' ? '#26231D' : '#8C8474', loginTabShadow: s.authMode === 'login' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
-      signupTabBg: s.authMode === 'signup' ? '#FFFDF8' : 'transparent', signupTabFg: s.authMode === 'signup' ? '#26231D' : '#8C8474', signupTabShadow: s.authMode === 'signup' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
+      loginTabBg: s.authMode === 'login' ? 'var(--surface)' : 'transparent', loginTabFg: s.authMode === 'login' ? 'var(--ink)' : 'var(--soft)', loginTabShadow: s.authMode === 'login' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
+      signupTabBg: s.authMode === 'signup' ? 'var(--surface)' : 'transparent', signupTabFg: s.authMode === 'signup' ? 'var(--ink)' : 'var(--soft)', signupTabShadow: s.authMode === 'signup' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       goHome: () => this.setState({ screen: 'home' }), goHistory: () => this.setState({ screen: 'history', historyDay: null }),
-      homeTabBg: s.screen === 'home' ? 'rgba(var(--accent-rgb),0.14)' : '#FFFDF8',
-      homeTabFg: s.screen === 'home' ? 'var(--accent-deep)' : '#8C8474',
-      histTabBg: s.screen === 'history' ? 'rgba(var(--accent-rgb),0.14)' : '#FFFDF8',
-      histTabFg: s.screen === 'history' ? 'var(--accent-deep)' : '#8C8474',
+      homeTabBg: s.screen === 'home' ? 'rgba(var(--accent-rgb),0.14)' : 'var(--surface)',
+      homeTabFg: s.screen === 'home' ? 'var(--accent-deep)' : 'var(--soft)',
+      histTabBg: s.screen === 'history' ? 'rgba(var(--accent-rgb),0.14)' : 'var(--surface)',
+      histTabFg: s.screen === 'history' ? 'var(--accent-deep)' : 'var(--soft)',
 
       nameField: s.nameField, setName: e => this.setState({ nameField: e.target.value }),
       inviteField: s.inviteField, setInvite: e => this.setState({ inviteField: e.target.value }),
@@ -1103,7 +1132,7 @@ export default class App extends React.Component {
       requestPlan, requestPlanRows,
       untilOptions: ['Until she wakes', 'Until 6 AM', 'Open-ended'].map(u => {
         const on = s.until === u
-        return { label: u, onTap: () => this.setState({ until: u }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: '#FFFDF8', border: 'rgba(38,35,29,0.12)', fg: '#6E6659' }) }
+        return { label: u, onTap: () => this.setState({ until: u }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
       theirShiftLine: completed ? (partnerName + ' has been on since ' + this.clock(sh.ended_at)) : (partnerName + ' has ' + (s.babyName || 'the baby') + ' right now'),
       shiftOpen: s.shiftOpen,
@@ -1151,7 +1180,7 @@ export default class App extends React.Component {
         const np = this.nPrefs()
         const row = (key, label, icon, color) => ({
           key, label, icon, color, on: !!np[key],
-          toggleIcon: np[key] ? 'toggle_on' : 'toggle_off', toggleColor: np[key] ? 'var(--accent)' : '#CFC7B4',
+          toggleIcon: np[key] ? 'toggle_on' : 'toggle_off', toggleColor: np[key] ? 'var(--accent)' : 'var(--dim)',
           onToggle: () => this.setNotify({ [key]: !np[key] }),
         })
         return {
@@ -1176,7 +1205,7 @@ export default class App extends React.Component {
           ].map(([v2, label]) => ({ label, onTap: () => this.setNotify({ feedEvery: v2 }), ...this.chip(np.feedEvery === v2, OLIVE) })),
           onDutyOnly: np.onDutyOnly,
           onDutyToggleIcon: np.onDutyOnly ? 'toggle_on' : 'toggle_off',
-          onDutyToggleColor: np.onDutyOnly ? 'var(--accent)' : '#CFC7B4',
+          onDutyToggleColor: np.onDutyOnly ? 'var(--accent)' : 'var(--dim)',
           toggleOnDuty: () => this.setNotify({ onDutyOnly: !np.onDutyOnly }),
           medsOn: np.meds, medsTime: np.medsTime,
           setMedsTime: e => e.target.value && this.setNotify({ medsTime: e.target.value }),
@@ -1188,7 +1217,7 @@ export default class App extends React.Component {
       trackRows: TRACKS.map(tr => {
         const on = this.trackOn(tr.key), tt = T(tr.types[0])
         return { label: tr.label, icon: tt.icon, color: tt.color,
-          toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? 'var(--accent)' : '#CFC7B4',
+          toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? 'var(--accent)' : 'var(--dim)',
           onToggle: () => this.setTracking(tr.key, !on) }
       }),
       widgetRows: (() => {
@@ -1196,7 +1225,7 @@ export default class App extends React.Component {
         return WIDGETS.filter(w => !w.track || this.trackOn(w.track)).map(w => {
           const on = shown.includes(w.key)
           return { label: w.label, icon: w.icon, color: w.color,
-            toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? 'var(--accent)' : '#CFC7B4',
+            toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? 'var(--accent)' : 'var(--dim)',
             onToggle: () => this.setWidget(w.key, !on) }
         })
       })(),
@@ -1211,6 +1240,10 @@ export default class App extends React.Component {
           on: (s.settings.theme?.bg || 'cream') === key,
           onTap: () => this.setTheme({ bg: key }),
         })),
+        modes: [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([key, label]) => ({
+          key, label, on: (s.fx.mode || 'auto') === key, onTap: () => this.setFxMode(key),
+        })),
+        tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
       },
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode,
@@ -1221,10 +1254,20 @@ export default class App extends React.Component {
     const v = this.renderVals()
     return (
       <div className="app">
-        {/* background illustration + wash */}
-        <div style={S('position:absolute;inset:0;z-index:0;pointer-events:none')}>
-          <img src="/art/app-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
+        {/* background illustration + wash; .fx-* layers drift on --par-x/--par-y
+            from fx.js — each layer's negative inset covers its travel distance */}
+        <div style={S('position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden')}>
+          <div className="fx-layer fx-far" style={S('position:absolute;inset:-14px')}>
+            <img className="bg-art" src="/art/app-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
+          </div>
+          <div className="fx-layer fx-mid" style={S('position:absolute;inset:-24px')}>
+            <div style={S('position:absolute;top:-8%;right:-16%;width:66%;aspect-ratio:1;border-radius:999px;background:radial-gradient(circle, rgba(var(--accent-rgb),0.16), rgba(var(--accent-rgb),0) 70%)')} />
+            <div style={S('position:absolute;bottom:14%;left:-18%;width:58%;aspect-ratio:1;border-radius:999px;background:radial-gradient(circle, rgba(var(--accent-rgb),0.12), rgba(var(--accent-rgb),0) 70%)')} />
+          </div>
           <div style={S('position:absolute;inset:0;background:linear-gradient(to bottom, rgba(250,246,239,0.25), rgba(250,246,239,0.6) 45%, rgba(250,246,239,0.85))')} />
+          <div className="fx-layer fx-near" style={S('position:absolute;inset:-36px')}>
+            <div style={S('position:absolute;top:22%;left:-12%;width:40%;aspect-ratio:1;border-radius:999px;background:radial-gradient(circle, rgba(var(--accent-rgb),0.10), rgba(var(--accent-rgb),0) 70%)')} />
+          </div>
         </div>
 
         {v.isSplash && (
@@ -1250,7 +1293,7 @@ export default class App extends React.Component {
           <div style={S('flex:1;display:flex;flex-direction:column;padding:8px 24px 20px;overflow:auto;position:relative;z-index:1;min-height:0')}>
             <div style={S('display:flex;align-items:center;justify-content:space-between')}>
               <button type="button" onClick={v.goSplash} className="hov-cream" style={S('width:38px;height:38px;border-radius:999px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);display:flex;align-items:center;justify-content:center;cursor:pointer')}>
-                <Sym style={{ fontSize: 20, color: '#6E6659' }}>arrow_back</Sym>
+                <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
               </button>
               <div style={S('display:flex;align-items:center;gap:6px')}>
                 <Duck size={30} />
@@ -1282,7 +1325,7 @@ export default class App extends React.Component {
             )}
             <button type="button" onClick={v.authSubmit} className="hov-olive" style={S('margin-top:18px;width:100%;height:60px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(var(--accent-rgb),0.3)')}>
               <div style={S('font-size:17px;font-weight:700;color:#FCFBF6')}>{v.authCta}</div>
-              <Sym style={{ fontSize: 21, color: '#FCFBF6' }}>arrow_forward</Sym>
+              <Sym style={{ fontSize: 21, color: 'var(--on-accent)' }}>arrow_forward</Sym>
             </button>
             <div style={S('display:flex;align-items:center;gap:12px;padding:20px 0 14px')}>
               <div style={S('flex:1;height:1px;background:rgba(38,35,29,0.10)')} />
@@ -1334,7 +1377,7 @@ export default class App extends React.Component {
             <div style={S('flex:1')} />
             <button type="button" onClick={v.finishOnboard} className="hov-olive" style={S('margin-top:24px;width:100%;height:60px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
               <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>Start logging</div>
-              <Sym style={{ fontSize: 21, color: '#FCFBF6' }}>arrow_forward</Sym>
+              <Sym style={{ fontSize: 21, color: 'var(--on-accent)' }}>arrow_forward</Sym>
             </button>
           </div>
         )}
@@ -1370,7 +1413,7 @@ export default class App extends React.Component {
                   </div>
                   {v.timerMine ? (
                     <button type="button" onClick={v.stopTimer} className="hov-dark" style={S('position:relative;height:44px;padding:0 20px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
-                      <Sym style={{ fontSize: 18, color: '#FAF6EF' }}>stop</Sym>
+                      <Sym style={{ fontSize: 18, color: 'var(--bg)' }}>stop</Sym>
                       <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop</div>
                     </button>
                   ) : (
@@ -1403,7 +1446,7 @@ export default class App extends React.Component {
                   </div>
                   <div style={S('display:flex;gap:8px;padding-top:2px')}>
                     <button type="button" onClick={v.acceptShift} className="hov-olive" style={S('flex:1;height:50px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:inherit;box-shadow:0 6px 16px rgba(var(--accent-rgb),0.28)')}>
-                      <Sym style={{ fontSize: 20, color: '#FCFBF6' }}>check</Sym>
+                      <Sym style={{ fontSize: 20, color: 'var(--on-accent)' }}>check</Sym>
                       <div style={S('font-size:15px;font-weight:700;color:#FCFBF6')}>I’ve got him</div>
                     </button>
                     <button type="button" onClick={v.openShift} className="hov-cream" style={S('height:50px;padding:0 18px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;color:#6E6659')}>Details</button>
@@ -1436,12 +1479,12 @@ export default class App extends React.Component {
                   ))}
                   <div style={S('display:flex;align-items:center;justify-content:space-between;padding:8px 0 4px;border-top:1px solid rgba(38,35,29,0.06)')}>
                     <button type="button" onClick={v.addPlanFeed} className="hov-dim" style={S('background:none;border:none;display:flex;align-items:center;gap:5px;cursor:pointer;font-family:inherit;padding:4px 0')}>
-                      <Sym style={{ fontSize: 17, color: '#8C8474' }}>add</Sym>
+                      <Sym style={{ fontSize: 17, color: 'var(--soft)' }}>add</Sym>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#8C8474")}>Add to plan</div>
                     </button>
                     <button type="button" onClick={v.openShift} className="hov-dim" style={S('background:none;border:none;display:flex;align-items:center;gap:5px;cursor:pointer;font-family:inherit;padding:4px 0')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#5F6E42")}>Hand back</div>
-                      <Sym style={{ fontSize: 17, color: '#5F6E42' }}>arrow_forward</Sym>
+                      <Sym style={{ fontSize: 17, color: 'var(--accent-text)' }}>arrow_forward</Sym>
                     </button>
                   </div>
                 </div>
@@ -1487,7 +1530,7 @@ export default class App extends React.Component {
                       <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
                       <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}</div>
                     </div>
-                    <Sym style={{ fontSize: 18, color: '#CFC7B4', flexShrink: 0 }}>chevron_right</Sym>
+                    <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                   </button>
                 ))}
               </div>
@@ -1502,7 +1545,7 @@ export default class App extends React.Component {
               {v.dayView ? (
                 <>
                   <button type="button" onClick={v.dayView.back} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
-                    <Sym style={{ fontSize: 20, color: '#6E6659' }}>arrow_back</Sym>
+                    <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
                   </button>
                   <div style={S('display:flex;flex-direction:column;gap:1px')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>{v.dayView.label}</div>
@@ -1518,7 +1561,7 @@ export default class App extends React.Component {
                   </div>
                   <div style={S('flex:1')} />
                   <button type="button" onClick={v.goSettings} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
-                    <Sym style={{ fontSize: 20, color: '#6E6659' }}>settings</Sym>
+                    <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>settings</Sym>
                   </button>
                 </>
               )}
@@ -1541,7 +1584,7 @@ export default class App extends React.Component {
                         <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
                         <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}</div>
                       </div>
-                      <Sym style={{ fontSize: 18, color: '#CFC7B4', flexShrink: 0 }}>chevron_right</Sym>
+                      <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                     </button>
                   ))}
                 </div>
@@ -1600,7 +1643,7 @@ export default class App extends React.Component {
               )}
 
               <div style={S('background:rgba(var(--accent-rgb),0.10);border:1px solid rgba(var(--accent-rgb),0.22);border-radius:22px;padding:16px;margin-top:12px;display:flex;gap:12px;align-items:flex-start')}>
-                <Sym style={{ fontSize: 20, color: '#5F6E42', flexShrink: 0 }}>insights</Sym>
+                <Sym style={{ fontSize: 20, color: 'var(--accent-text)', flexShrink: 0 }}>insights</Sym>
                 <div style={S('display:flex;flex-direction:column;gap:3px')}>
                   <div style={S('font-size:14.5px;font-weight:600;color:var(--accent-deep)')}>{v.patternTitle}</div>
                   <div style={S('font-size:13px;line-height:1.5;color:#5F6E42;text-wrap:pretty')}>{v.patternBody}</div>
@@ -1609,7 +1652,7 @@ export default class App extends React.Component {
 
               {v.wakeInsight && (
                 <div style={S('background:rgba(var(--accent-rgb),0.10);border:1px solid rgba(var(--accent-rgb),0.22);border-radius:22px;padding:16px;margin-top:12px;display:flex;gap:12px;align-items:flex-start')}>
-                  <Sym style={{ fontSize: 20, color: '#5F6E42', flexShrink: 0 }}>wb_twilight</Sym>
+                  <Sym style={{ fontSize: 20, color: 'var(--accent-text)', flexShrink: 0 }}>wb_twilight</Sym>
                   <div style={S('display:flex;flex-direction:column;gap:3px')}>
                     <div style={S('font-size:14.5px;font-weight:600;color:var(--accent-deep)')}>{v.wakeInsight.title}</div>
                     <div style={S('font-size:13px;line-height:1.5;color:#5F6E42;text-wrap:pretty')}>{v.wakeInsight.body}</div>
@@ -1625,7 +1668,7 @@ export default class App extends React.Component {
                       <div style={S('font-size:14.5px;font-weight:600;letter-spacing:-0.01em')}>{d.label}</div>
                       <div style={S('font-size:11.5px;color:#8C8474')}>{d.sub}</div>
                     </div>
-                    <Sym style={{ fontSize: 18, color: '#CFC7B4', flexShrink: 0 }}>chevron_right</Sym>
+                    <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                   </button>
                 ))}
               </div>
@@ -1633,7 +1676,7 @@ export default class App extends React.Component {
               {v.trackRec && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:22px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px;margin-top:12px;display:flex;flex-direction:column;gap:12px')}>
                   <div style={S('display:flex;gap:12px;align-items:flex-start')}>
-                    <Sym style={{ fontSize: 20, color: '#8C8474', flexShrink: 0 }}>visibility_off</Sym>
+                    <Sym style={{ fontSize: 20, color: 'var(--soft)', flexShrink: 0 }}>visibility_off</Sym>
                     <div style={S('display:flex;flex-direction:column;gap:3px')}>
                       <div style={S('font-size:14.5px;font-weight:600')}>{v.trackRec.title}</div>
                       <div style={S('font-size:13px;line-height:1.5;color:#6E6659;text-wrap:pretty')}>{v.trackRec.body}</div>
@@ -1656,7 +1699,7 @@ export default class App extends React.Component {
           <div style={S('flex:1;display:flex;flex-direction:column;min-height:0;position:relative;z-index:1')}>
             <div style={S('padding:10px 20px 12px;display:flex;align-items:center;gap:10px')}>
               <button type="button" onClick={v.settingsBack} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
-                <Sym style={{ fontSize: 20, color: '#6E6659' }}>arrow_back</Sym>
+                <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
               </button>
               <div style={S('display:flex;flex-direction:column;gap:1px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Settings</div>
@@ -1683,8 +1726,8 @@ export default class App extends React.Component {
                 </div>
                 <div style={S('display:flex;gap:10px;padding:2px 0 8px 29px;overflow:auto')}>
                   {v.appearance.accents.map(a => (
-                    <button key={a.key} type="button" onClick={a.onTap} title={a.label} aria-label={a.label} style={S(`flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${a.color};border:2px solid ${a.on ? '#26231D' : 'rgba(38,35,29,0.10)'};padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center`)}>
-                      {a.on && <Sym style={{ fontSize: 16, color: '#FCFBF6' }}>check</Sym>}
+                    <button key={a.key} type="button" onClick={a.onTap} title={a.label} aria-label={a.label} style={S(`flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${a.color};border:2px solid ${a.on ? 'var(--ink)' : 'rgba(var(--ink-rgb),0.10)'};padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center`)}>
+                      {a.on && <Sym style={{ fontSize: 16, color: 'var(--on-accent)' }}>check</Sym>}
                     </button>
                   ))}
                 </div>
@@ -1694,12 +1737,32 @@ export default class App extends React.Component {
                 </div>
                 <div style={S('display:flex;gap:10px;padding:2px 0 8px 29px;overflow:auto')}>
                   {v.appearance.bgs.map(b => (
-                    <button key={b.key} type="button" onClick={b.onTap} title={b.label} aria-label={b.label} style={S(`flex-shrink:0;width:34px;height:34px;border-radius:999px;background:${b.color};border:2px solid ${b.on ? '#26231D' : 'rgba(38,35,29,0.14)'};padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center`)}>
-                      {b.on && <Sym style={{ fontSize: 16, color: '#26231D' }}>check</Sym>}
+                    // background lives outside S() so the cream swatch keeps its literal color in dark mode
+                    <button key={b.key} type="button" onClick={b.onTap} title={b.label} aria-label={b.label} style={{ ...S(`flex-shrink:0;width:34px;height:34px;border-radius:999px;border:2px solid ${b.on ? 'var(--ink)' : 'rgba(var(--ink-rgb),0.14)'};padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center`), background: b.color }}>
+                      {b.on && <Sym style={{ fontSize: 16, color: '#26231D' /* swatch itself is always light */ }}>check</Sym>}
                     </button>
                   ))}
                 </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>The log wears these colors for both of you.</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 300)' }}>dark_mode</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Theme</div>
+                </div>
+                <div style={S('display:flex;gap:8px;padding:2px 0 8px 29px')}>
+                  {v.appearance.modes.map(m => (
+                    <button key={m.key} type="button" onClick={m.onTap} className={m.on ? undefined : 'hov-bd'} style={S(`flex:1;height:34px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;background:${m.on ? 'rgba(var(--accent-rgb),0.16)' : 'var(--surface)'};border:1px solid ${m.on ? 'var(--accent)' : 'rgba(var(--ink-rgb),0.12)'};color:${m.on ? 'var(--accent-deep)' : 'var(--muted)'}`)}>{m.label}</button>
+                  ))}
+                </div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 210)' }}>screen_rotation</Sym>
+                  <div style={S('flex:1')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Tilt parallax</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>The background drifts as the phone tilts</div>
+                  </div>
+                  <button type="button" onClick={v.appearance.tilt.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                    <Sym style={{ fontSize: 22, color: v.appearance.tilt.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.tilt.on ? 'toggle_on' : 'toggle_off'}</Sym>
+                  </button>
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Colors are shared with your partner. Theme and tilt stay on this phone.</div>
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
@@ -1737,7 +1800,7 @@ export default class App extends React.Component {
                   <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Push to this phone</div>
                   {v.notify.supported && (
                     <button type="button" onClick={v.notify.togglePush} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
-                      <Sym style={{ fontSize: 22, color: v.notify.pushOn ? 'var(--accent)' : '#CFC7B4' }}>{v.notify.pushOn ? 'toggle_on' : 'toggle_off'}</Sym>
+                      <Sym style={{ fontSize: 22, color: v.notify.pushOn ? 'var(--accent)' : 'var(--dim)' }}>{v.notify.pushOn ? 'toggle_on' : 'toggle_off'}</Sym>
                     </button>
                   )}
                 </div>
@@ -1801,7 +1864,7 @@ export default class App extends React.Component {
                 <div style={S(`font-size:11px;font-weight:600;color:${v.homeTabFg};letter-spacing:0.01em`)}>Now</div>
               </button>
               <button type="button" onClick={v.openSheet} className="hov-olive" style={S('width:68px;height:68px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 20px rgba(var(--accent-rgb),0.34);margin-bottom:6px')}>
-                <Sym style={{ fontSize: 32, color: '#FCFBF6' }}>add</Sym>
+                <Sym style={{ fontSize: 32, color: 'var(--on-accent)' }}>add</Sym>
               </button>
               <button type="button" onClick={v.goHistory} className="hov-cream" style={S(`height:56px;flex:1;background:${v.histTabBg};border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;font-family:inherit`)}>
                 <Sym style={{ fontSize: 20, color: v.histTabFg }}>bar_chart</Sym>
@@ -1811,7 +1874,7 @@ export default class App extends React.Component {
             {v.hasPartner && (
               <div style={S('display:flex;justify-content:center;padding-top:6px;position:relative;z-index:1')}>
                 <button type="button" onClick={v.openShift} className="hov-dim" style={S('background:none;border:none;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;padding:4px 10px')}>
-                  <Sym style={{ fontSize: 16, color: '#8C8474' }}>swap_horiz</Sym>
+                  <Sym style={{ fontSize: 16, color: 'var(--soft)' }}>swap_horiz</Sym>
                   <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.footerShiftLabel}</div>
                 </button>
               </div>
@@ -1836,7 +1899,7 @@ export default class App extends React.Component {
               transition: v.sheetDragging ? 'none' : 'transform 0.28s cubic-bezier(0.32,0.72,0,1)',
             }}>
               <div style={S('position:absolute;inset:0;z-index:0')}>
-                <img src="/art/sheet-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
+                <img className="bg-art" src="/art/sheet-bg.png" alt="" style={S('width:100%;height:100%;object-fit:cover;display:block')} />
                 <div style={S('position:absolute;inset:0;background:rgba(250,246,239,0.7);pointer-events:none')} />
               </div>
               <div onPointerDown={v.sheetDragStart} onPointerMove={v.sheetDragMove} onPointerUp={v.sheetDragEnd} onPointerCancel={v.sheetDragEnd}
@@ -1851,7 +1914,7 @@ export default class App extends React.Component {
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>{v.sheetKicker}</div>
                     <div style={S('display:flex;align-items:baseline;gap:7px')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-size:31px;font-weight:700;letter-spacing:-0.04em")}>{v.stampTime}</div>
-                      <Sym style={{ fontSize: 15, color: '#B5AC98' }}>edit</Sym>
+                      <Sym style={{ fontSize: 15, color: 'var(--faint)' }}>edit</Sym>
                     </div>
                     <input type="time" value={v.stampHM} onChange={v.pickTime} onClick={v.showTimePicker} style={S('position:absolute;inset:0;width:100%;height:100%;opacity:0;border:0;padding:0;margin:0;cursor:pointer')} />
                   </label>
@@ -1917,12 +1980,12 @@ export default class App extends React.Component {
 
                 {v.timerFirst ? (
                   <button type="button" onClick={v.startTimer} className="hov-olive" style={S('margin-top:16px;width:100%;height:66px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
-                    <Sym style={{ fontSize: 23, color: '#FCFBF6' }}>play_arrow</Sym>
+                    <Sym style={{ fontSize: 23, color: 'var(--on-accent)' }}>play_arrow</Sym>
                     <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>{v.startTimerLabel}</div>
                   </button>
                 ) : (
                   <button type="button" onClick={v.save} className="hov-olive" style={S('margin-top:16px;width:100%;height:66px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
-                    <Sym style={{ fontSize: 23, color: '#FCFBF6' }}>check</Sym>
+                    <Sym style={{ fontSize: 23, color: 'var(--on-accent)' }}>check</Sym>
                     <div style={S('font-size:17px;font-weight:600;color:#FCFBF6;letter-spacing:-0.01em')}>{v.saveLabel}</div>
                   </button>
                 )}
@@ -1954,7 +2017,7 @@ export default class App extends React.Component {
                       <div style={S(`width:56px;height:56px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{v.partnerName}</div>
                     </div>
-                    <Sym style={{ fontSize: 28, color: '#B5AC98', marginBottom: 22 }}>arrow_forward</Sym>
+                    <Sym style={{ fontSize: 28, color: 'var(--faint)', marginBottom: 22 }}>arrow_forward</Sym>
                     <div style={S('display:flex;flex-direction:column;align-items:center;gap:6px')}>
                       <div style={S(`width:56px;height:56px;border-radius:999px;background:${ME_COLOR};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.myInitial}</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>You</div>
@@ -1997,7 +2060,7 @@ export default class App extends React.Component {
                   </div>
 
                   <button type="button" onClick={v.acceptShift} className="hov-olive" style={S('margin-top:14px;width:100%;height:62px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
-                    <Sym style={{ fontSize: 22, color: '#FCFBF6' }}>check</Sym>
+                    <Sym style={{ fontSize: 22, color: 'var(--on-accent)' }}>check</Sym>
                     <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>I’ve got him — start my shift</div>
                   </button>
                   <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px')}>{v.partnerName} gets a “you’re covered” ping and can sleep.</div>
@@ -2026,12 +2089,12 @@ export default class App extends React.Component {
                     <input value={v.handbackNote} onChange={v.setHandbackNote} placeholder="e.g. took the 1am bottle slow, fell asleep on me" style={S('width:100%;box-sizing:border-box;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:12px 13px;font-size:14.5px;color:#26231D;outline:none')} />
                   </div>
                   <button type="button" onClick={v.handBack} className="hov-olive" style={S('margin-top:14px;width:100%;height:62px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
-                    <Sym style={{ fontSize: 22, color: '#FCFBF6' }}>swap_horiz</Sym>
+                    <Sym style={{ fontSize: 22, color: 'var(--on-accent)' }}>swap_horiz</Sym>
                     <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>Hand back to {v.partnerName}</div>
                   </button>
                   {v.canRequest && (
                     <button type="button" onClick={v.requestHandoff} className="hov-dim" style={S("margin-top:10px;width:100%;background:none;border:none;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#5F6E42;padding:6px 0")}>
-                      <Sym style={{ fontSize: 16, color: '#5F6E42' }}>notifications</Sym>
+                      <Sym style={{ fontSize: 16, color: 'var(--accent-text)' }}>notifications</Sym>
                       Ask {v.partnerName} to take over — sends your note
                     </button>
                   )}
@@ -2043,7 +2106,7 @@ export default class App extends React.Component {
                 <>
                   <div style={S('display:flex;align-items:center;gap:12px;padding:4px 4px 14px')}>
                     <div style={S('width:48px;height:48px;border-radius:999px;background:rgba(var(--accent-rgb),0.16);display:flex;align-items:center;justify-content:center')}>
-                      <Sym style={{ fontSize: 24, color: '#5F6E42' }}>task_alt</Sym>
+                      <Sym style={{ fontSize: 24, color: 'var(--accent-text)' }}>task_alt</Sym>
                     </div>
                     <div style={S('display:flex;flex-direction:column;gap:2px')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:22px;letter-spacing:-0.02em")}>{v.reportTitle}</div>

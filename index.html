@@ -16,6 +16,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700&family=Nunito:wght@500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0&display=block" rel="stylesheet" />
+  <script>
+    // pre-paint dark check so a dark-mode launch never flashes cream;
+    // src/fx.js owns this decision once the app is up
+    try {
+      var m = (JSON.parse(localStorage.getItem('babylog:fx')) || {}).mode || 'auto'
+      var dark = m === 'dark' || (m === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches)
+      if (dark) document.documentElement.classList.add('dark')
+      document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+    } catch (e) { /* default light */ }
+  </script>
 </head>
 <body>
   <div id="root"></div>
