@@ -574,7 +574,7 @@ export default class App extends React.Component {
   }
   lastOf(keys) { return this.live().filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
 
-  // ── nursing / pump timers (server-backed, live) ────────────────────────────
+  // ── nursing / pump / sleep timers (server-backed, live) ────────────────────
   stopwatch(ms) {
     const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60
     const pad = n => String(n).padStart(2, '0')
@@ -609,6 +609,16 @@ export default class App extends React.Component {
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
         toast: 'Nursing logged · ' + this.dur(mins), lastAdded: entry.id, timerSide: null,
+      }), () => this.flushSoon())
+      this.bumpToast()
+    } else if (t.type === 'sleep') {
+      // sleep: the entry stamps the wake-up moment, and the duration leads the
+      // detail as bare minutes (the sleep format — the wake-window insight
+      // subtracts it from t to find when the nap started)
+      const entry = { id: uuid(), type: 'sleep', t: Date.now(), detail: mins, by: this.state.me?.id }
+      this.setState(s => ({
+        entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
+        toast: 'Sleep logged · ' + this.dur(mins), lastAdded: entry.id,
       }), () => this.flushSoon())
       this.bumpToast()
     } else {
@@ -1072,8 +1082,8 @@ export default class App extends React.Component {
     const detailStr = (kind === 'amount' ? (s.detail != null ? ' ' + s.detail + ' ' + this.unit() : '') : kind === 'side' ? ' ' + (s.detail || '') : kind === 'dur' ? ' ' + this.dur(s.detail) : '')
       + (s.detail2 != null ? (kind2 === 'milk' ? ' · ' + (s.detail2 === 'formula' ? 'formula' : 'breast milk') : ' · ' + this.dur(s.detail2)) : '')
 
-    // nursing/pump default to the live timer; a manual toggle logs a past session
-    const timerType = (st.key === 'nurse' || st.key === 'pump') && !s.editId
+    // nursing/pump/sleep default to the live timer; a manual toggle logs a past session
+    const timerType = (st.key === 'nurse' || st.key === 'pump' || st.key === 'sleep') && !s.editId
     const timerFirst = timerType && !s.manualDur
     const at = s.activeTimer
     const atType = at ? T(at.type) : null
@@ -1250,15 +1260,15 @@ export default class App extends React.Component {
       scrubMove: this.scrubMove, scrubEnd: this.scrubEnd,
       showStamp: !timerFirst,
       timerFirst,
-      startTimerLabel: 'Start ' + (st.key === 'nurse' ? 'nursing' : 'pumping'),
+      startTimerLabel: 'Start ' + (st.key === 'nurse' ? 'nursing' : st.key === 'sleep' ? 'sleep timer' : 'pumping'),
       startTimer: () => this.startTimer(st.key),
       canManual: timerType,
       toManual: () => this.setState({ manualDur: true }),
       toTimer: () => this.setState({ manualDur: false }),
-      manualHint: st.key === 'nurse' ? 'Log a past feed' : 'Log a past session',
+      manualHint: st.key === 'nurse' ? 'Log a past feed' : st.key === 'sleep' ? 'Log a past sleep' : 'Log a past session',
       // running-timer banner on Now
       timerActive: !!at,
-      timerLabel: at ? (at.type === 'nurse' ? 'Nursing' : 'Pumping') : '',
+      timerLabel: at ? (at.type === 'nurse' ? 'Nursing' : at.type === 'sleep' ? 'Sleep' : 'Pumping') : '',
       timerIcon: atType ? atType.icon : 'timer',
       timerColor: atType ? atType.color : OLIVE,
       timerElapsed: at ? this.stopwatch(Date.now() - at.started_at) : '',
