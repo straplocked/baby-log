@@ -4,12 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
+use App\Mail\PartnerInvite;
 use App\Models\Entry;
 use App\Models\User;
 use App\Services\PushService;
+use App\Support\AppMail;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Mail;
 
 class SyncController extends Controller
 {
@@ -92,9 +95,26 @@ class SyncController extends Controller
             'invite_code_hash' => hash('sha256', $code),
         ]);
 
+        // with SMTP configured the invitee also gets the code by email; the
+        // on-screen code stays the source of truth either way
+        $mailed = false;
+        if (AppMail::configured()) {
+            try {
+                Mail::to(strtolower($data['email']))->send(new PartnerInvite(
+                    $request->user()->name,
+                    $household->baby?->name,
+                    $code,
+                    rtrim((string) config('app.url'), '/'),
+                ));
+                $mailed = true;
+            } catch (\Throwable) {
+                // bad SMTP creds must not kill the invite — the code still works
+            }
+        }
+
         HouseholdTouched::send($household->id, 'invite');
 
-        return response()->json(['ok' => true, 'code' => $code]);
+        return response()->json(['ok' => true, 'code' => $code, 'mailed' => $mailed]);
     }
 
     /** Trackers the household can switch off; feeds are core and not listed. */

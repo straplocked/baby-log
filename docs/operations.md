@@ -44,6 +44,24 @@ If realtime breaks remotely but works on LAN, check the websocket toggle on the 
 
 Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): add `BABYLOG_OPEN_REGISTRATION: "true"` to the api service env in the Unraid compose and re-run the update script.
 
+## Enabling email (invite mail + password reset)
+
+Out of the box the instance can't send mail (`MAIL_MAILER` defaults to `log`): invites show the shareable code only, and "Forgot password?" tells the user this server can't send email. To turn email on, append SMTP credentials to `/mnt/user/appdata/baby-log/.env` (User Scripts can do it, or edit the file over SMB):
+
+```
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.example.com
+MAIL_PORT=587
+MAIL_USERNAME=you@example.com
+MAIL_PASSWORD=app-password
+MAIL_FROM_ADDRESS=you@example.com
+# MAIL_SCHEME=smtps   # only for implicit-TLS servers (usually port 465)
+```
+
+Then run **`babylog-update`** once. That's required, not optional: compose only injects `.env` values into the containers when it (re)creates them, and the update script's `docker compose up -d` recreates api+reverb because their environment changed. Nothing else — no config cache to clear (the containers don't run `config:cache`), no manual container restarts.
+
+With mail on: invites also email the code to the partner (the on-screen code still works and stays the source of truth), and "Forgot password?" emails a reset link pointing at `APP_URL/?reset=…` — so `APP_URL` in that same `.env` must be the real public origin (`https://babylog.example.com`) or the links will point somewhere useless. A failed SMTP send never blocks an invite; it falls back to code-only (`mailed: false`).
+
 ## Local development
 
 ```bash
