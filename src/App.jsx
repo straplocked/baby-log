@@ -136,8 +136,9 @@ function applyTheme(theme) {
   r.setProperty('--accent-text', dark ? `color-mix(in oklab, ${a.accent} 68%, #F2EDE2)` : `color-mix(in oklab, ${a.accent} 74%, #26231D)`)
   r.setProperty('--bg', b.bg)
   r.setProperty('--bg-rgb', b.rgb)
-  const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.content = b.bg
+  // there are light + dark media-split tags (index.html); the browser honors
+  // whichever matches the OS, so write the household tint to all of them
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => { m.content = b.bg })
 }
 
 // ── local-first persistence (per-device cache; server is the shared log) ─────
