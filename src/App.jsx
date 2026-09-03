@@ -644,8 +644,9 @@ export default class App extends React.Component {
     // pre-picked nurse side (if any) is remembered locally for the stop log
     const side = type === 'nurse' ? (this.state.detail || this.defaultDetail('nurse')) : null
     this._timerBusy = true
+    this.closeSheet() // animated close that also consumes the {blSheet} history entry
     this.setState({
-      sheet: false, manualDur: false,
+      manualDur: false,
       activeTimer: { id: 'local', type, started_at: Date.now(), user_id: this.state.me?.id },
       timerSide: side,
     })
