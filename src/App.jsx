@@ -533,18 +533,10 @@ export default class App extends React.Component {
   }), () => this.flushSoon())
   // theme mode & tilt are per-phone (fx.js), not household settings — the
   // night-shift parent going dark shouldn't flip their partner's screen
-  setFxMode = mode => {
-    const wasDark = isDark()
-    const fx = setFx({ mode })
-    this.setState({ fx }, () => {
-      // Android's installed-app status bar is only painted from the theme-color
-      // metas at document load — runtime mutations are ignored — so when a mode
-      // flip actually changes darkness, recreate the document like native apps
-      // recreate their activity. State survives: it all lives in localStorage.
-      if (isDark() !== wasDark && /android/i.test(navigator.userAgent)
-        && window.matchMedia('(display-mode: standalone)').matches) location.reload()
-    })
-  }
+  // note: Android's installed-app status bar follows the OS scheme only
+  // (ColorUtils.inNightMode) — no page-side action can recolor it, so don't
+  // bother reloading or rewriting metas beyond what applyTheme already does
+  setFxMode = mode => this.setState({ fx: setFx({ mode }) })
   toggleTilt = async () => {
     const on = !this.state.fx.tilt
     if (on) await askTiltPermission() // iOS wants the request inside this tap
