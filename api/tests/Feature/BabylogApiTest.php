@@ -255,4 +255,42 @@ class BabylogApiTest extends TestCase
         $ben = $this->register('Ben', 'ben@example.com')->json('token');
         $this->postJson('/api/timer/start', ['type' => 'bottle'], $this->authed($ben))->assertStatus(422);
     }
+
+    // ── shift edge cases ─────────────────────────────────────────────────────
+
+    public function test_accept_tolerates_fractional_plan_timestamps(): void
+    {
+        // the client derives plan times from an averaged feed gap — a float.
+        // this used to 422 the whole handoff and the UI swallowed it as "offline"
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+        $katId = $this->getJson('/api/state', $this->authed($kat))->json('user.id');
+
+        $plan = [['id' => 'p1', 'type' => 'bottle', 'at' => 1788385718169.5], ['id' => 'p2', 'type' => 'bottle', 'at' => 1788396518169.25]];
+        $res = $this->postJson('/api/shifts/accept', ['plan' => $plan, 'until' => 'Until 6 AM'], $this->authed($kat))->assertOk();
+        $this->assertSame(1788385718170, $res->json('shift.plan.0.at'));
+        $this->assertSame($katId, $this->getJson('/api/state', $this->authed($ben))->json('onDutyUserId'));
+
+        // plan replacement is just as forgiving
+        $this->postJson('/api/shifts/plan', ['plan' => [['id' => 'p3', 'type' => 'meds', 'at' => 1788400000000.7]]], $this->authed($kat))->assertOk();
+        $this->assertSame(1788400000001, $this->getJson('/api/state', $this->authed($kat))->json('shift.plan.0.at'));
+    }
+
+    public function test_handback_cancels_a_lingering_request(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+        $katId = $this->getJson('/api/state', $this->authed($kat))->json('user.id');
+
+        // Ben asks, Katrina never answers, Ben hands duty over directly anyway
+        $this->postJson('/api/shifts/request', ['note' => 'take him?'], $this->authed($ben))->assertOk();
+        $this->postJson('/api/shifts/handback', [], $this->authed($ben))->assertOk();
+
+        $state = $this->getJson('/api/state', $this->authed($kat))->json();
+        $this->assertSame($katId, $state['onDutyUserId']);
+        // the stale ask must not survive to render a phantom "Ben is handing off" card
+        $this->assertNotSame('requested', $state['shift']['state']);
+    }
 }

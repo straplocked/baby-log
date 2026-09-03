@@ -22,26 +22,49 @@ class ShiftController extends Controller
         }
     }
 
-    /** On-duty parent asks the partner to take over ("Hand off"). */
+    /**
+     * Plan items arrive with ms timestamps the client derives from an averaged
+     * feed gap — a float. Rejecting the whole handoff over a fractional
+     * millisecond is how accepts silently failed; coerce instead.
+     */
+    private const PLAN_RULES = [
+        'plan' => ['nullable', 'array', 'max:20'],
+        'plan.*.id' => ['required', 'string', 'max:40'],
+        'plan.*.type' => ['required', 'string', 'max:20'],
+        'plan.*.at' => ['required', 'numeric'],
+    ];
+
+    private function intPlan(?array $plan): array
+    {
+        return array_map(fn ($p) => [...$p, 'at' => (int) round($p['at'])], $plan ?? []);
+    }
+
+    /**
+     * On-duty parent asks the partner to take over ("Hand off"). Asking again
+     * while a request is pending refreshes it and re-pings — a deliberate
+     * nudge, not a silent no-op.
+     */
     public function request(Request $request): JsonResponse
     {
         $data = $request->validate(['note' => ['nullable', 'string', 'max:500']]);
         $household = $request->user()->household;
 
-        $pending = $household->shifts()->where('state', 'requested')->first();
-        if (! $pending) {
-            $household->shifts()->create([
-                'state' => 'requested',
-                'requester_id' => $request->user()->id,
-                'note' => $data['note'] ?? null,
-                'requested_at' => now()->getTimestampMs(),
-            ]);
-            $this->pushHandoff(
-                $household->partnerOf($request->user()),
-                $request->user()->name.' is asking you to take over',
-                ($data['note'] ?? null) ?: 'Open Baby Log to see the handoff.',
-            );
+        $pending = $household->shifts()->where('state', 'requested')->latest('id')->first();
+        $values = [
+            'requester_id' => $request->user()->id,
+            'note' => $data['note'] ?? null,
+            'requested_at' => now()->getTimestampMs(),
+        ];
+        if ($pending) {
+            $pending->update($values);
+        } else {
+            $household->shifts()->create(['state' => 'requested', ...$values]);
         }
+        $this->pushHandoff(
+            $household->partnerOf($request->user()),
+            $request->user()->name.' is asking you to take over',
+            ($data['note'] ?? null) ?: 'Open Baby Log to see the handoff.',
+        );
 
         HouseholdTouched::send($household->id, 'shift');
 
@@ -51,13 +74,7 @@ class ShiftController extends Controller
     /** "I've got him" — start my shift (accepts a pending request if one exists). */
     public function accept(Request $request): JsonResponse
     {
-        $data = $request->validate([
-            'plan' => ['nullable', 'array', 'max:20'],
-            'plan.*.id' => ['required', 'string', 'max:40'],
-            'plan.*.type' => ['required', 'string', 'max:20'],
-            'plan.*.at' => ['required', 'integer'],
-            'until' => ['nullable', 'string', 'max:60'],
-        ]);
+        $data = $request->validate([...self::PLAN_RULES, 'until' => ['nullable', 'string', 'max:60']]);
 
         $user = $request->user();
         $household = $user->household;
@@ -69,7 +86,7 @@ class ShiftController extends Controller
             'household_id' => $household->id,
             'state' => 'active',
             'user_id' => $user->id,
-            'plan' => $data['plan'] ?? [],
+            'plan' => $this->intPlan($data['plan'] ?? null),
             'until' => $data['until'] ?? null,
             'started_at' => now()->getTimestampMs(),
         ])->save();
@@ -90,16 +107,11 @@ class ShiftController extends Controller
     /** Replace the plan on my active shift (e.g. "Add to plan"). */
     public function plan(Request $request): JsonResponse
     {
-        $data = $request->validate([
-            'plan' => ['present', 'array', 'max:20'],
-            'plan.*.id' => ['required', 'string', 'max:40'],
-            'plan.*.type' => ['required', 'string', 'max:20'],
-            'plan.*.at' => ['required', 'integer'],
-        ]);
+        $data = $request->validate([...self::PLAN_RULES, 'plan' => ['present', 'array', 'max:20']]);
 
         $user = $request->user();
         $shift = $user->household->shifts()->where('state', 'active')->where('user_id', $user->id)->latest('id')->first();
-        $shift?->update(['plan' => $data['plan']]);
+        $shift?->update(['plan' => $this->intPlan($data['plan'])]);
 
         HouseholdTouched::send($user->household_id, 'shift');
 
@@ -123,6 +135,9 @@ class ShiftController extends Controller
                 'handback_note' => $data['note'] ?? null,
             ]);
         }
+        // duty is moving anyway — a still-pending "take over?" ask would only
+        // leave the partner a stale incoming card
+        $household->shifts()->where('state', 'requested')->update(['state' => 'cancelled']);
 
         $household->update(['on_duty_user_id' => $partner?->id ?? $user->id]);
 

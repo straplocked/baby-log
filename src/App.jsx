@@ -507,7 +507,8 @@ export default class App extends React.Component {
     const t = this.live().filter(e => FEEDS.includes(e.type)).map(e => e.t).sort((a, b) => a - b)
     const starts = sessionStarts(t).slice(-14)
     const gaps = []; for (let i = 1; i < starts.length; i++) gaps.push(starts[i] - starts[i - 1])
-    return gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 3 * 3600000
+    // whole ms: plan timestamps built from this go to the server as integers
+    return gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : 3 * 3600000
   }
   draftPlan() {
     const gap = this.feedGap(), feed = this.lastOf(FEEDS), now = Date.now()
@@ -568,6 +569,16 @@ export default class App extends React.Component {
   }
 
   // ── shifts (server-backed) ─────────────────────────────────────────────────
+  // a server rejection is not "offline": say why, and fall back to server truth
+  // instead of leaving optimistic duty state that quietly reverts on the next pull
+  shiftFail = e => {
+    if (e && e.status) {
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({ toast: first || e.message || 'That didn’t go through — try again', lastAdded: null })
+      this.bumpToast()
+      this.sync()
+    } else this.setState({ offline: true })
+  }
   openShift = () => {
     if (!this.state.partner) return // no one to hand to yet
     this.setState(s => ({ shiftOpen: true, planDraft: s.planDraft || this.draftPlan() }))
@@ -586,13 +597,13 @@ export default class App extends React.Component {
       serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, started_at: Date.now() },
       toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', lastAdded: null,
     }), () => this.bumpToast())
-    api.shiftAccept(plan, until).then(r => this.setState({ serverShift: r.shift })).catch(() => this.setState({ offline: true }))
+    api.shiftAccept(plan, until).then(r => this.setState({ serverShift: r.shift })).catch(this.shiftFail)
   }
   addPlanFeed = () => this.setState(s => {
     const last = s.plan.filter(p => FEEDS.includes(p.type)).sort((a, b) => b.at - a.at)[0]
     const plan = [...s.plan, { id: 'p' + Date.now(), type: 'bottle', at: (last ? last.at : Date.now()) + this.feedGap() }]
     return { plan, serverShift: s.serverShift ? { ...s.serverShift, plan } : s.serverShift }
-  }, () => api.shiftPlan(this.state.plan).catch(() => {}))
+  }, () => api.shiftPlan(this.state.plan).catch(this.shiftFail))
   handBack = () => {
     const note = this.state.handbackNote
     this.setState(s => ({
@@ -602,7 +613,7 @@ export default class App extends React.Component {
         : { id: -2, state: 'completed', user_id: s.me?.id, started_at: s.serverShift?.started_at ?? Date.now(), ended_at: Date.now(), handback_note: note },
       onDutyUserId: s.partner?.id ?? s.onDutyUserId,
     }))
-    api.shiftHandback(note).then(r => { if (r.shift) this.setState({ serverShift: r.shift }) }).catch(() => this.setState({ offline: true }))
+    api.shiftHandback(note).then(r => { if (r.shift) this.setState({ serverShift: r.shift }) }).catch(this.shiftFail)
   }
   requestHandoff = () => {
     const note = this.state.handbackNote
@@ -612,7 +623,7 @@ export default class App extends React.Component {
       serverShift: { id: -3, state: 'requested', requester_id: s.me?.id, note, requested_at: Date.now() },
       toast: (partner?.name || 'Your partner') + ' will get your handoff ask', lastAdded: null,
     }), () => this.bumpToast())
-    api.shiftRequest(note).catch(() => this.setState({ offline: true }))
+    api.shiftRequest(note).catch(this.shiftFail)
   }
 
   // ── quick-log sheet ────────────────────────────────────────────────────────

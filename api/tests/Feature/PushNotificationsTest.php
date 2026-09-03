@@ -144,6 +144,19 @@ class PushNotificationsTest extends TestCase
         $this->assertSame('went fine', $this->push->to($benId)[1]['body']);
     }
 
+    public function test_asking_again_nudges_the_partner(): void
+    {
+        [$ben, $kat, , $katId] = $this->household();
+
+        $this->postJson('/api/shifts/request', ['note' => 'first ask'], $this->authed($ben))->assertOk();
+        // a second ask while the first is pending used to be a silent no-op
+        $this->postJson('/api/shifts/request', ['note' => 'still need you'], $this->authed($ben))->assertOk();
+
+        $this->assertCount(2, $this->push->to($katId));
+        $this->assertSame('still need you', $this->push->to($katId)[1]['body']);
+        $this->assertSame('still need you', $this->getJson('/api/state', $this->authed($kat))->json('shift.note'));
+    }
+
     public function test_handoff_push_respects_the_pref(): void
     {
         [$ben, $kat, , $katId] = $this->household();

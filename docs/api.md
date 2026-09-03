@@ -99,13 +99,13 @@ Clears `active_timer`, broadcasts a poke. Returns `{ ok }`. The client logs the 
 ## Shifts — all auth + throttle 120/min
 
 ### `POST /shifts/request`
-`{ note? }` — on-duty parent asks the partner to take over. No-op if a request is already pending.
+`{ note? }` — on-duty parent asks the partner to take over. Asking again while a request is pending **refreshes it and re-pings** the partner (a deliberate nudge, not a no-op).
 
 ### `POST /shifts/accept`
-`{ plan?: [{id,type,at}] (≤20), until? }` — accepts the pending request (or starts a shift outright). Sets duty to caller, `state=active`, returns the shift.
+`{ plan?: [{id,type,at}] (≤20), until? }` — accepts the pending request (or starts a shift outright). Sets duty to caller, `state=active`, returns the shift. `at` is `numeric` and coerced to integer ms — the client derives it from an averaged feed gap, and a fractional value must never reject the whole handoff.
 
 ### `POST /shifts/plan`
-`{ plan: [...] }` — replaces the plan on the caller's active shift (no-op if none).
+`{ plan: [...] }` — replaces the plan on the caller's active shift (no-op if none). Same `numeric` → int coercion on `at`.
 
 ### `POST /shifts/handback`
 `{ note? }` — completes the caller's active shift, stores `handback_note`, transfers duty to the partner. Returns the shift. Clients render the report from synced entries between `started_at`/`ended_at`.
