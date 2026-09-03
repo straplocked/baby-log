@@ -4,8 +4,8 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 ## Things a user will notice
 
-- **Invites don't send email.** `POST /invite` stores the invite and returns the code — the inviter must text/tell the partner the code themselves. The UI says "Invited …" which can read as "an email was sent". Fix candidates: actually send mail (needs SMTP config), or reword the UI to "share this code".
-- **"Forgot password?" is a dead link.** No reset flow exists. With no mailer, a reset would need an out-of-band mechanism (e.g. a reset script on the server, or SMTP first).
+- ~~**Invites don't send email.**~~ Fixed 2026-09-03: with SMTP configured (see operations.md "Enabling email"), `POST /invite` also emails the invitee the code, and the UI says whether it went out (`mailed`). Without SMTP the behavior is unchanged — the inviter shares the on-screen code, and the toast says "Invited …" not "Emailed …".
+- ~~**"Forgot password?" is a dead link.**~~ Fixed 2026-09-03: full flow (`/forgot-password` + `/reset-password`, links land on `/?reset=…`). Needs SMTP; without it the UI explains "this home server can't send email yet". Remaining gap: an instance with no SMTP *and* a forgotten password still needs server-side surgery (e.g. `php artisan tinker` to set a new hash, or `babylog-reset-data`).
 - **Partial account/settings screen.** There's now a Settings screen (gear in the History header) holding About/birth date, What-you-track, Notifications, and Log out. Still can't change name, email, password, baby name (after onboarding), or units from it.
 - **Units are hardcoded to oz.** `unit`, `timeStep`, and `smartPrefill` exist as component props (from the design comp's config) but aren't exposed anywhere in the UI.
 - ~~**Baby "age" is a static label**~~ Fixed 2026-09-02: onboarding asks for a birth date (editable later in History → About), and the header age computes live (weeks → months → years). The old label remains only as a fallback for babies without a DOB.

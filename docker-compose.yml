@@ -18,6 +18,15 @@ x-laravel-env: &laravel-env
   REVERB_HOST: reverb
   REVERB_PORT: "8080"
   REVERB_SCHEME: http
+  # email (optional) — left on "log" the app degrades gracefully: invites show
+  # a shareable code and "Forgot password?" says this instance can't send mail
+  MAIL_MAILER: ${MAIL_MAILER:-log}
+  MAIL_HOST: ${MAIL_HOST:-null}
+  MAIL_PORT: ${MAIL_PORT:-587}
+  MAIL_USERNAME: ${MAIL_USERNAME:-null}
+  MAIL_PASSWORD: ${MAIL_PASSWORD:-null}
+  MAIL_SCHEME: ${MAIL_SCHEME:-null}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-hello@example.com}
 
 services:
   app:

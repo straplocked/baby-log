@@ -4,11 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
+use App\Mail\PasswordResetLink;
 use App\Models\Household;
 use App\Models\User;
+use App\Support\AppMail;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -86,6 +90,52 @@ class AuthController extends Controller
         }
 
         return response()->json(['token' => $user->createToken('app')->plainTextToken]);
+    }
+
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $data = $request->validate(['email' => ['required', 'email']]);
+
+        // self-hosters without SMTP get a clear machine-readable state, not an
+        // error — the client turns it into friendly copy
+        if (! AppMail::configured()) {
+            return response()->json(['sent' => false, 'reason' => 'mail-unconfigured']);
+        }
+
+        Password::sendResetLink(
+            ['email' => strtolower($data['email'])],
+            function (User $user, string $token) {
+                Mail::to($user->email)->send(new PasswordResetLink($user->name, $user->email, $token));
+            },
+        );
+
+        // whatever the broker said — never reveal whether the email has an account
+        return response()->json(['sent' => true]);
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string', 'min:8'],
+        ]);
+
+        $status = Password::reset(
+            ['email' => strtolower($data['email']), 'password' => $data['password'], 'token' => $data['token']],
+            function (User $user, string $password) {
+                $user->forceFill(['password' => $password])->save(); // hashed by the cast
+                $user->tokens()->delete(); // old sessions die with the old password
+            },
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            throw ValidationException::withMessages([
+                'email' => ['That reset link has expired or was already used — ask for a fresh one from “Forgot password?”.'],
+            ]);
+        }
+
+        return response()->json(['ok' => true]);
     }
 
     public function logout(Request $request): JsonResponse

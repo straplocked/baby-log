@@ -144,7 +144,7 @@ function applyTheme(theme) {
 // ── local-first persistence (per-device cache; server is the shared log) ─────
 const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
-  'me', 'partner', 'invitePending', 'inviteCode', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
+  'me', 'partner', 'invitePending', 'inviteCode', 'inviteMailed', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
   'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide']
 
@@ -178,7 +178,9 @@ export default class App extends React.Component {
     this.state = {
       screen: 'splash', authMode: 'signup', tick: 0,
       authName: '', authEmail: '', authPassword: '', authInvite: '', authError: null, authBusy: false,
-      inviteCode: null,
+      inviteCode: null, inviteMailed: false,
+      forgotOpen: false, forgotEmail: '', forgotBusy: false, forgotResult: null, // null | 'sent' | 'unconfigured' | 'error'
+      resetToken: null, resetEmail: '', resetPw: '', resetBusy: false, resetError: null, // ?reset=<token>&email= flow
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       activeTimer: null, timerSide: null, manualDur: false,
@@ -199,6 +201,16 @@ export default class App extends React.Component {
     this.state.settings = { tracking: {}, dismissed: [], ...(this.state.settings || {}) }
     // no token → cached signed-in screens are stale
     if (!getToken() && !['splash', 'auth'].includes(this.state.screen)) this.state.screen = 'splash'
+    // arriving from a password-reset email: ?reset=<token>&email=<addr> — the
+    // token lives only in memory; a reload after replaceState falls through
+    try {
+      const q = new URLSearchParams(window.location.search)
+      if (q.get('reset') && q.get('email')) {
+        this.state.resetToken = q.get('reset')
+        this.state.resetEmail = q.get('email')
+        this.state.screen = 'reset'
+      } else if (this.state.screen === 'reset') this.state.screen = 'splash'
+    } catch { if (this.state.screen === 'reset') this.state.screen = 'splash' }
   }
 
   componentDidMount() {
@@ -228,6 +240,10 @@ export default class App extends React.Component {
     window.addEventListener('popstate', this._pop)
     if (window.history.state?.blSheet || window.history.state?.blSettings || window.history.state?.blDay) {
       try { window.history.replaceState(null, '') } catch { /* fine */ }
+    }
+    // the reset token was captured into state — scrub it out of the URL/history
+    if (window.location.search) {
+      try { window.history.replaceState(null, '', window.location.pathname) } catch { /* fine */ }
     }
   }
   componentWillUnmount() {
@@ -360,6 +376,38 @@ export default class App extends React.Component {
     }
   }
 
+  // ── forgot / reset password ────────────────────────────────────────────────
+  sendForgot = async () => {
+    const email = (this.state.forgotEmail || '').trim()
+    if (!email || this.state.forgotBusy) return
+    this.setState({ forgotBusy: true, forgotResult: null })
+    try {
+      const r = await api.forgotPassword(email)
+      this.setState({ forgotBusy: false, forgotResult: r.sent ? 'sent' : 'unconfigured' })
+    } catch {
+      this.setState({ forgotBusy: false, forgotResult: 'error' })
+    }
+  }
+
+  submitReset = async () => {
+    const s = this.state
+    if (s.resetBusy) return
+    if ((s.resetPw || '').length < 8) return this.setState({ resetError: 'Pick a password with at least 8 characters.' })
+    this.setState({ resetBusy: true, resetError: null })
+    try {
+      await api.resetPassword({ token: s.resetToken, email: s.resetEmail, password: s.resetPw })
+      this.setState({
+        screen: 'auth', authMode: 'login', authEmail: s.resetEmail, authError: null,
+        resetToken: null, resetPw: '', resetBusy: false,
+        toast: 'Password updated — log in with the new one', lastAdded: null,
+      })
+      this.bumpToast()
+    } catch (e) {
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({ resetBusy: false, resetError: first || e.message || 'Something went wrong — try again.' })
+    }
+  }
+
   finishOnboard = async () => {
     const name = (this.state.nameField || '').trim() || 'Baby'
     const age = this.state.age
@@ -376,7 +424,11 @@ export default class App extends React.Component {
     if (!email) return
     try {
       const r = await api.invite(email)
-      this.setState({ invitePending: email, inviteCode: r.code, toast: 'Invited ' + email + ' — their code is ' + r.code, lastAdded: null })
+      this.setState({
+        invitePending: email, inviteCode: r.code, inviteMailed: !!r.mailed,
+        toast: r.mailed ? 'Emailed ' + email + ' — their code is ' + r.code : 'Invited ' + email + ' — their code is ' + r.code,
+        lastAdded: null,
+      })
       this.bumpToast()
     } catch (e) {
       this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', lastAdded: null })
@@ -397,7 +449,8 @@ export default class App extends React.Component {
     this._autoOpened = null
     this.setState({
       screen: 'splash', authMode: 'signup', authName: '', authEmail: '', authPassword: '', authError: null,
-      entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null,
+      forgotOpen: false, forgotEmail: '', forgotResult: null,
+      entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null, inviteCode: null, inviteMailed: false,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false, shiftOpen: false, toast: null,
       plan: [], planDraft: null, planOff: [], handbackNote: '',
@@ -1250,6 +1303,18 @@ export default class App extends React.Component {
       authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
       authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
       socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
+      forgotOpen: s.forgotOpen,
+      toggleForgot: () => this.setState(x => ({ forgotOpen: !x.forgotOpen, forgotResult: null, forgotEmail: x.forgotEmail || x.authEmail })),
+      forgotEmail: s.forgotEmail, setForgotEmail: e => this.setState({ forgotEmail: e.target.value, forgotResult: null }),
+      sendForgot: this.sendForgot, forgotBusy: s.forgotBusy, forgotResult: s.forgotResult,
+      forgotCopy: s.forgotResult === 'sent' ? 'If that email has a log here, a reset link is on its way — check spam too.'
+        : s.forgotResult === 'unconfigured' ? 'This home server can’t send email yet — ask whoever runs it, or reset from the server.'
+          : 'No signal — try again in a moment.',
+      isReset: s.screen === 'reset',
+      resetEmail: s.resetEmail,
+      resetPw: s.resetPw, setResetPw: e => this.setState({ resetPw: e.target.value, resetError: null }),
+      submitReset: this.submitReset, resetBusy: s.resetBusy, resetError: s.resetError,
+      resetToLogin: () => this.setState({ screen: 'auth', authMode: 'login', authEmail: s.resetEmail, resetToken: null, resetPw: '', authError: null }),
       loginTabBg: s.authMode === 'login' ? 'var(--surface)' : 'transparent', loginTabFg: s.authMode === 'login' ? 'var(--ink)' : 'var(--soft)', loginTabShadow: s.authMode === 'login' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       signupTabBg: s.authMode === 'signup' ? 'var(--surface)' : 'transparent', signupTabFg: s.authMode === 'signup' ? 'var(--ink)' : 'var(--soft)', signupTabShadow: s.authMode === 'signup' ? '0 2px 8px rgba(38,35,29,0.08)' : 'none',
       goHome: () => this.setState({ screen: 'home' }), goHistory: () => this.setState({ screen: 'history', historyDay: null }),
@@ -1441,7 +1506,7 @@ export default class App extends React.Component {
         return { label, onTap: () => this.setState({ exportRange: val }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
       logout: () => this.doLogout(true),
-      invitePending: s.invitePending, inviteCode: s.inviteCode,
+      invitePending: s.invitePending, inviteCode: s.inviteCode, inviteMailed: s.inviteMailed,
     }
   }
 
@@ -1513,7 +1578,20 @@ export default class App extends React.Component {
               )}
             </div>
             {v.isLogin && (
-              <div style={S('display:flex;justify-content:flex-end;padding-top:10px')}><a href="#" onClick={e => e.preventDefault()} style={S('font-size:13.5px;font-weight:600;color:#5F6E42')}>Forgot password?</a></div>
+              <div style={S('display:flex;justify-content:flex-end;padding-top:10px')}><a href="#" onClick={e => { e.preventDefault(); v.toggleForgot() }} style={S('font-size:13.5px;font-weight:600;color:#5F6E42')}>Forgot password?</a></div>
+            )}
+            {v.isLogin && v.forgotOpen && (
+              <div style={S('margin-top:10px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:24px;padding:16px 18px')}>
+                <div style={S('font-size:13.5px;font-weight:700;color:#26231D')}>Reset your password</div>
+                <div style={S('font-size:12.5px;line-height:1.5;color:#8C8474;padding-top:4px;text-wrap:pretty')}>We’ll email you a link to set a new one.</div>
+                <div style={S('display:flex;gap:8px;padding-top:10px')}>
+                  <input placeholder="Email" type="email" value={v.forgotEmail} onChange={v.setForgotEmail} style={S('flex:1;min-width:0;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                  <button type="button" onClick={v.sendForgot} className="hov-olive" style={S('height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6;flex-shrink:0')}>{v.forgotBusy ? 'One sec…' : 'Send'}</button>
+                </div>
+                {v.forgotResult && (
+                  <div style={S(`font-size:12.5px;line-height:1.5;padding-top:10px;text-wrap:pretty;color:${v.forgotResult === 'error' ? '#A85A45' : '#6E6659'}`)}>{v.forgotCopy}</div>
+                )}
+              </div>
             )}
             {v.authError && (
               <div style={S('font-size:13px;line-height:1.4;color:#A85A45;padding-top:12px;text-wrap:pretty')}>{v.authError}</div>
@@ -1533,6 +1611,35 @@ export default class App extends React.Component {
             </div>
             <div style={S('flex:1')} />
             <div style={S('font-size:12px;line-height:1.5;color:#B5AC98;text-align:center;padding-top:16px;text-wrap:pretty')}>Invited by a partner? Use the same email they sent it to and you’ll land in their log.</div>
+          </div>
+        )}
+
+        {v.isReset && (
+          <div style={S('flex:1;display:flex;flex-direction:column;padding:8px 24px 20px;overflow:auto;position:relative;z-index:1;min-height:0')}>
+            <div style={S('display:flex;align-items:center;justify-content:space-between')}>
+              <button type="button" onClick={v.resetToLogin} className="hov-cream" style={S('width:38px;height:38px;border-radius:999px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);display:flex;align-items:center;justify-content:center;cursor:pointer')}>
+                <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
+              </button>
+              <div style={S('display:flex;align-items:center;gap:6px')}>
+                <Duck size={30} />
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>Baby Log</div>
+              </div>
+              <div style={S('width:38px')} />
+            </div>
+            <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:28px;line-height:1.12;letter-spacing:-0.02em;padding-top:26px;text-wrap:pretty")}>Set a new password</div>
+            <div style={S('font-size:14.5px;line-height:1.5;color:#6E6659;padding-top:6px;text-wrap:pretty')}>For {v.resetEmail} — pick something with at least 8 characters. Your log is untouched.</div>
+            <div style={S('display:flex;flex-direction:column;gap:10px;padding-top:22px')}>
+              <input placeholder="New password" type="password" value={v.resetPw} onChange={v.setResetPw} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:18px;padding:15px 18px;font-size:16.5px;color:#26231D;outline:none')} />
+            </div>
+            {v.resetError && (
+              <div style={S('font-size:13px;line-height:1.4;color:#A85A45;padding-top:12px;text-wrap:pretty')}>{v.resetError}</div>
+            )}
+            <button type="button" onClick={v.submitReset} className="hov-olive" style={S('margin-top:18px;width:100%;height:60px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(var(--accent-rgb),0.3)')}>
+              <div style={S('font-size:17px;font-weight:700;color:#FCFBF6')}>{v.resetBusy ? 'One sec…' : 'Save new password'}</div>
+              <Sym style={{ fontSize: 21, color: 'var(--on-accent)' }}>arrow_forward</Sym>
+            </button>
+            <div style={S('flex:1')} />
+            <div style={S('font-size:12px;line-height:1.5;color:#B5AC98;text-align:center;padding-top:16px;text-wrap:pretty')}>Reset links work once and expire after about an hour — ask for a fresh one from “Forgot password?” if this one is stale.</div>
           </div>
         )}
 
@@ -2075,7 +2182,7 @@ export default class App extends React.Component {
               </div>
 
               {v.invitePending && (
-                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>Invite waiting for {v.invitePending} — they sign up with that email{v.inviteCode ? ' and code ' + v.inviteCode : ''} and land here.</div>
+                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>{v.inviteMailed ? 'Invite emailed to ' + v.invitePending : 'Invite waiting for ' + v.invitePending} — they sign up with that email{v.inviteCode ? ' and code ' + v.inviteCode : ''} and land here.</div>
               )}
               <div style={S('text-align:center;padding:16px 0 0')}>
                 <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>

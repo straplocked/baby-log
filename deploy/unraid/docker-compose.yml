@@ -29,6 +29,16 @@ x-laravel-env: &laravel-env
   REVERB_ALLOWED_ORIGINS: ${REVERB_ALLOWED_ORIGINS:-*}
   REVERB_APP_MAX_CONNECTIONS: ${REVERB_APP_MAX_CONNECTIONS:-100}
   REVERB_APP_RATE_LIMITING_ENABLED: "true"
+  # email (optional) — see docs/operations.md "Enabling email". Left on "log"
+  # the app degrades gracefully: invites show a shareable code and
+  # "Forgot password?" explains this instance can't send mail.
+  MAIL_MAILER: ${MAIL_MAILER:-log}
+  MAIL_HOST: ${MAIL_HOST:-null}
+  MAIL_PORT: ${MAIL_PORT:-587}
+  MAIL_USERNAME: ${MAIL_USERNAME:-null}
+  MAIL_PASSWORD: ${MAIL_PASSWORD:-null}
+  MAIL_SCHEME: ${MAIL_SCHEME:-null}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-hello@example.com}
 
 services:
   app:

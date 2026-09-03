@@ -2,8 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Mail\PartnerInvite;
+use App\Mail\PasswordResetLink;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class BabylogApiTest extends TestCase
@@ -310,5 +313,84 @@ class BabylogApiTest extends TestCase
         $this->assertSame($katId, $state['onDutyUserId']);
         // the stale ask must not survive to render a phantom "Ben is handing off" card
         $this->assertNotSame('requested', $state['shift']['state']);
+    }
+
+    // ── email flows (invite mail + password reset) ────────────────────────────
+
+    public function test_invite_emails_the_partner_when_mail_is_configured(): void
+    {
+        config(['mail.default' => 'smtp']);
+        Mail::fake();
+
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $res = $this->postJson('/api/invite', ['email' => 'Katrina@Example.com'], $this->authed($ben))->assertOk();
+
+        $this->assertTrue($res->json('mailed'));
+        Mail::assertSent(PartnerInvite::class, fn (PartnerInvite $mail) => $mail->hasTo('katrina@example.com')
+            && $mail->code === $res->json('code')
+            && $mail->inviterName === 'Ben');
+    }
+
+    public function test_invite_stays_silent_without_a_mailer(): void
+    {
+        config(['mail.default' => 'log']);
+        Mail::fake();
+
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $res = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->assertOk();
+
+        $this->assertFalse($res->json('mailed'));
+        $this->assertNotEmpty($res->json('code')); // the shareable code still works
+        Mail::assertNothingSent();
+    }
+
+    public function test_forgot_password_reports_when_mail_is_unconfigured(): void
+    {
+        config(['mail.default' => 'log']);
+        $this->register('Ben', 'ben@example.com');
+
+        $this->postJson('/api/forgot-password', ['email' => 'ben@example.com'])
+            ->assertOk()
+            ->assertJson(['sent' => false, 'reason' => 'mail-unconfigured']);
+    }
+
+    public function test_forgot_password_never_reveals_whether_an_account_exists(): void
+    {
+        config(['mail.default' => 'smtp']);
+        Mail::fake();
+        $this->register('Ben', 'ben@example.com');
+
+        $this->postJson('/api/forgot-password', ['email' => 'ben@example.com'])->assertOk()->assertJson(['sent' => true]);
+        $this->postJson('/api/forgot-password', ['email' => 'stranger@example.com'])->assertOk()->assertJson(['sent' => true]);
+
+        Mail::assertSent(PasswordResetLink::class, 1); // only the real account got mail
+    }
+
+    public function test_password_reset_round_trip_changes_the_password(): void
+    {
+        config(['mail.default' => 'smtp']);
+        Mail::fake();
+        $this->register('Ben', 'ben@example.com');
+
+        $this->postJson('/api/forgot-password', ['email' => 'ben@example.com'])->assertOk();
+
+        $token = null;
+        Mail::assertSent(PasswordResetLink::class, function (PasswordResetLink $mail) use (&$token) {
+            $token = $mail->token;
+
+            // the link lands on the SPA, which reads ?reset & email on boot
+            return str_contains($mail->url, '/?reset='.$mail->token)
+                && str_contains($mail->url, 'email=ben%40example.com');
+        });
+        $this->assertNotNull($token);
+
+        // a garbage token is refused and changes nothing
+        $this->postJson('/api/reset-password', ['token' => 'not-the-token', 'email' => 'ben@example.com', 'password' => 'newpassword9'])->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
+
+        $this->postJson('/api/reset-password', ['token' => $token, 'email' => 'ben@example.com', 'password' => 'newpassword9'])->assertOk();
+
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'newpassword9'])->assertOk();
     }
 }
