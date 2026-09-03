@@ -99,3 +99,13 @@ html.dark .hov-dark:hover { background: #FBF7EF !important; } /* ink buttons inv
 .hov-bd:hover { border-color: rgba(var(--ink-rgb), 0.24) !important; }
 .hov-dim:hover { opacity: 0.7; }
 .hov-row:hover { background: rgba(var(--accent-rgb), 0.05) !important; }
+
+/* toast entrance: a subtle rise+fade on mount; the exit fade is inline
+   (opacity transition driven by toastLeaving in App.jsx) */
+@keyframes bl-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+.toast-in { animation: bl-toast-in 0.26s cubic-bezier(0.32, 0.72, 0, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .toast-in { animation: none; }
+}
