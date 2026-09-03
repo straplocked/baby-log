@@ -4,3 +4,5 @@ dist
 
 # Internal business/strategy docs — never publish
 docs/market-research.md
+docs/saas-web-presence-research.md
+docs/marketing-site-handoff.md
