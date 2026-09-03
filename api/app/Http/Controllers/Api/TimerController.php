@@ -10,19 +10,19 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 /**
- * The live nursing/pump timer. Only the running state lives here — when the
- * timer stops, the client writes the resulting entry through the normal outbox,
- * so the log stays the single source of truth (the server stores facts, not
- * in-flight guesses).
+ * The live nursing/pump/sleep timer. Only the running state lives here — when
+ * the timer stops, the client writes the resulting entry through the normal
+ * outbox, so the log stays the single source of truth (the server stores facts,
+ * not in-flight guesses).
  */
 class TimerController extends Controller
 {
-    private const LABELS = ['nurse' => 'nursing', 'pump' => 'pumping'];
+    private const LABELS = ['nurse' => 'nursing', 'pump' => 'pumping', 'sleep' => 'a sleep timer'];
 
     /** Start (or replace) the household's running timer. */
     public function start(Request $request): JsonResponse
     {
-        $data = $request->validate(['type' => ['required', 'in:nurse,pump']]);
+        $data = $request->validate(['type' => ['required', 'in:nurse,pump,sleep']]);
 
         $user = $request->user();
         $household = $user->household;

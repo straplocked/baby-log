@@ -256,6 +256,24 @@ class BabylogApiTest extends TestCase
         $this->postJson('/api/timer/start', ['type' => 'bottle'], $this->authed($ben))->assertStatus(422);
     }
 
+    public function test_sleep_timer_syncs_to_the_partner_and_clears_on_stop(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $timer = $this->postJson('/api/timer/start', ['type' => 'sleep'], $this->authed($ben))->assertOk()->json('timer');
+        $this->assertSame('sleep', $timer['type']);
+
+        // the other parent's pull sees the same running timer
+        $synced = $this->getJson('/api/state', $this->authed($kat))->json('timer');
+        $this->assertSame('sleep', $synced['type']);
+        $this->assertSame($timer['id'], $synced['id']);
+
+        $this->postJson('/api/timer/stop', [], $this->authed($ben))->assertOk();
+        $this->assertNull($this->getJson('/api/state', $this->authed($kat))->json('timer'));
+    }
+
     // ── shift edge cases ─────────────────────────────────────────────────────
 
     public function test_accept_tolerates_fractional_plan_timestamps(): void
