@@ -165,6 +165,7 @@ const dSplit = d => {
   }
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'e' + Date.now() + Math.random().toString(36).slice(2, 9))
+const csvEsc = v => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v }
 
 const Sym = ({ style, children }) => (
   <span style={{ fontFamily: "'Material Symbols Rounded'", lineHeight: 1, ...style }}>{children}</span>
@@ -214,11 +215,17 @@ export default class App extends React.Component {
     this.refreshPush()
     initFx(() => applyTheme(this.state.settings.theme)) // OS scheme / light sensor changes re-resolve dark
     applyTheme(this.state.settings.theme)
-    // Android back gesture closes the sheet (mountSheet pushed the entry);
-    // a stale entry can survive a reload mid-sheet — drop it so back exits
-    this._pop = () => { if (this.state.sheet) this.dismissSheet() }
+    // Android back gesture closes overlays in stacking order: sheet first,
+    // then the settings screen back to history — never straight out of the app.
+    // A stale entry can survive a reload mid-overlay — drop it so back exits.
+    this._pop = () => {
+      if (this.state.sheet) return this.dismissSheet()
+      if (this.state.screen === 'settings') this.setState({ screen: 'history' })
+    }
     window.addEventListener('popstate', this._pop)
-    if (window.history.state?.blSheet) try { window.history.replaceState(null, '') } catch { /* fine */ }
+    if (window.history.state?.blSheet || window.history.state?.blSettings) {
+      try { window.history.replaceState(null, '') } catch { /* fine */ }
+    }
   }
   componentWillUnmount() {
     clearInterval(this._iv); clearInterval(this._sec); if (this._to) clearTimeout(this._to); if (this._flushTo) clearTimeout(this._flushTo)
@@ -702,6 +709,66 @@ export default class App extends React.Component {
     if (k === 'bottle') { const l = this.lastOf(['bottle']); return l ? dSplit(l.detail).milk : null }
     return null
   }
+  // ── provider export: CSV through the native share sheet (download fallback) ─
+  exportRows() {
+    const who = {}
+    for (const u of [this.state.me, this.state.partner]) if (u) who[u.id] = u.name || ''
+    const pad = n => String(n).padStart(2, '0')
+    return this.live().slice().sort((a, b) => a.t - b.t).map(e => {
+      const d = dSplit(e.detail), dt = new Date(e.t)
+      return {
+        key: e.type,
+        date: dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()),
+        time: pad(dt.getHours()) + ':' + pad(dt.getMinutes()),
+        type: T(e.type).label,
+        oz: ['bottle', 'pump'].includes(e.type) ? d.n : null,
+        mins: e.type === 'sleep' ? d.n : d.mins, // sleep stores its minutes as the leading number
+        note: [d.side, d.milk].filter(Boolean).join(' · '),
+        by: who[e.by] || '',
+      }
+    })
+  }
+  shareCsv = async (name, lines) => {
+    const file = new File([lines.join('\r\n') + '\r\n'], name, { type: 'text/csv' })
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return } catch { /* declined or unsupported — fall back */ }
+    }
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url; a.download = name; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  }
+  exportName(kind) {
+    const day = new Date().toISOString().slice(0, 10)
+    return ['baby-log', (this.state.babyName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-'), kind, day].filter(Boolean).join('-') + '.csv'
+  }
+  exportLog = () => {
+    this.shareCsv(this.exportName('full'), [
+      'Date,Time,Type,Amount (oz),Duration (min),Detail,Logged by',
+      ...this.exportRows().map(r => [r.date, r.time, r.type, r.oz ?? '', r.mins ?? '', csvEsc(r.note), csvEsc(r.by)].join(',')),
+    ])
+  }
+  exportSummary = () => {
+    const days = new Map()
+    for (const r of this.exportRows()) {
+      let d = days.get(r.date)
+      if (!d) days.set(r.date, d = { feeds: 0, oz: 0, nurseMin: 0, pumpOz: 0, wet: 0, dirty: 0, sleepMin: 0, baths: 0, meds: 0 })
+      if (r.key === 'bottle') { d.feeds++; d.oz += r.oz || 0 }
+      if (r.key === 'nurse') { d.feeds++; d.nurseMin += r.mins || 0 }
+      if (r.key === 'pump') d.pumpOz += r.oz || 0
+      if (r.key === 'wet' || r.key === 'both') d.wet++
+      if (r.key === 'dirty' || r.key === 'both') d.dirty++
+      if (r.key === 'sleep') d.sleepMin += r.mins || 0
+      if (r.key === 'bath') d.baths++
+      if (r.key === 'meds') d.meds++
+    }
+    this.shareCsv(this.exportName('daily'), [
+      'Date,Feeds,Bottle (oz),Nursing (min),Pumped (oz),Wet diapers,Dirty diapers,Sleep (min),Baths,Meds',
+      ...[...days.entries()].map(([date, d]) =>
+        [date, d.feeds, d.oz || '', d.nurseMin || '', d.pumpOz || '', d.wet, d.dirty, d.sleepMin || '', d.baths || '', d.meds || ''].join(',')),
+    ])
+  }
+
   // detail state ↔ wire string: primary (amount/side/duration) in `detail`, extra (milk/minutes) in `detail2`
   composeDetail(k) {
     const a = this.state.detail, b = this.state.detail2
@@ -1121,8 +1188,15 @@ export default class App extends React.Component {
     return {
       onboarding: s.screen === 'onboard', isHome: s.screen === 'home', isHistory: s.screen === 'history',
       isSettings: s.screen === 'settings',
-      goSettings: () => this.setState({ screen: 'settings' }),
-      settingsBack: () => this.setState({ screen: 'history' }),
+      goSettings: () => {
+        try { window.history.pushState({ blSettings: true }, '') } catch { /* back just exits */ }
+        this.setState({ screen: 'settings' })
+      },
+      settingsBack: () => {
+        // consume our entry so the button and the back gesture stay in step
+        if (window.history.state?.blSettings) return window.history.back()
+        this.setState({ screen: 'history' })
+      },
       showTabs: ['home', 'history', 'settings'].includes(s.screen),
       isSplash: s.screen === 'splash', isAuth: s.screen === 'auth', isLogin: s.authMode === 'login', isSignup: s.authMode === 'signup',
       goSplash: () => this.setState({ screen: 'splash', authError: null }),
@@ -1323,6 +1397,7 @@ export default class App extends React.Component {
         })),
         tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
       },
+      exportLog: this.exportLog, exportSummary: this.exportSummary,
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode,
     }
@@ -1922,6 +1997,27 @@ export default class App extends React.Component {
                   </React.Fragment>
                 ))}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Quiet hours pause reminders and activity pings — handoff asks always come through. Reminders reach every phone you’ve switched on.</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Share with your pediatrician</div>
+                <button type="button" onClick={v.exportSummary} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 130)' }}>calendar_month</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Daily summary</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Feeds, ounces, diapers & sleep per day</div>
+                  </div>
+                  <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>ios_share</Sym>
+                </button>
+                <button type="button" onClick={v.exportLog} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 250)' }}>table_view</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Full log</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Every entry, spreadsheet-ready</div>
+                  </div>
+                  <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>ios_share</Sym>
+                </button>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Opens your phone’s share sheet as a CSV — send it by email or message.</div>
               </div>
 
               {v.invitePending && (

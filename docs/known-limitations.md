@@ -10,7 +10,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - **Units are hardcoded to oz.** `unit`, `timeStep`, and `smartPrefill` exist as component props (from the design comp's config) but aren't exposed anywhere in the UI.
 - ~~**Baby "age" is a static label**~~ Fixed 2026-09-02: onboarding asks for a birth date (editable later in History → About), and the header age computes live (weeks → months → years). The old label remains only as a fallback for babies without a DOB.
 - **Nursing and pumping now have a live start/stop timer** (Now-screen banner, shared across both phones, partner pinged on start); pumping's timer also captures the amount at stop. **Sleep is still logged as a duration after the fact** — no sleep timer / "currently asleep" state yet.
-- **Timeline shows the last 12 entries; History is a fixed 7-day window.** No day-by-day drill-down, no month view, no data export.
+- **Timeline shows the last 12 entries; History is a fixed 7-day window.** No day-by-day drill-down, no month view. ~~No data export~~ Fixed 2026-09-03: Settings → "Share with your pediatrician" exports a full log or per-day summary CSV via the native share sheet (download fallback). The export always covers all entries — no date-range picker yet.
 - **Entry types are fixed** (bottle, nursing, pump, wet, dirty, both, sleep, bath, meds). Meds is hardcoded to "vitamin D" in the subtitle. No custom types or notes on entries. (Households *can* now switch off pump/diapers/sleep/bath/meds tracking in History, but can't add types.)
 - **Offline indicator is subtle** (a small "· offline" in the header). Queued-but-unsynced entries aren't visually marked.
 - **Toast/undo only covers the last added entry**; edits and deletes have no undo.
