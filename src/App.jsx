@@ -165,6 +165,7 @@ const dSplit = d => {
   }
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'e' + Date.now() + Math.random().toString(36).slice(2, 9))
+const dayKey = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
 const csvEsc = v => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v }
 
 const Sym = ({ style, children }) => (
@@ -188,6 +189,7 @@ export default class App extends React.Component {
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
+      exportRange: 'all', // ephemeral — resets to Everything each load on purpose
       notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
       shiftOpen: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
       fx: getFx(), // device-local (babylog:fx), not in PERSIST
@@ -220,10 +222,11 @@ export default class App extends React.Component {
     // A stale entry can survive a reload mid-overlay — drop it so back exits.
     this._pop = () => {
       if (this.state.sheet) return this.dismissSheet()
+      if (this.state.screen === 'history' && this.state.historyDay) return this.setState({ historyDay: null })
       if (this.state.screen === 'settings') this.setState({ screen: 'history' })
     }
     window.addEventListener('popstate', this._pop)
-    if (window.history.state?.blSheet || window.history.state?.blSettings) {
+    if (window.history.state?.blSheet || window.history.state?.blSettings || window.history.state?.blDay) {
       try { window.history.replaceState(null, '') } catch { /* fine */ }
     }
   }
@@ -724,7 +727,12 @@ export default class App extends React.Component {
     const who = {}
     for (const u of [this.state.me, this.state.partner]) if (u) who[u.id] = u.name || ''
     const pad = n => String(n).padStart(2, '0')
-    return this.live().slice().sort((a, b) => a.t - b.t).map(e => {
+    // range chips: 7/30 count back from local midnight so "7 days" means the
+    // bars' window (today + 6 before), 'all' is everything on the device
+    const r = this.state.exportRange
+    let from = 0
+    if (r !== 'all') { const d = new Date(); d.setHours(0, 0, 0, 0); from = d.getTime() - (r - 1) * DAY }
+    return this.live().filter(e => e.t >= from).sort((a, b) => a.t - b.t).map(e => {
       const d = dSplit(e.detail), dt = new Date(e.t)
       return {
         key: e.type,
@@ -959,6 +967,20 @@ export default class App extends React.Component {
     this.bumpToast()
   }
 
+  // History day drill-down: one history entry per dive (paging days doesn't
+  // stack more) so the Android back gesture returns to the 7-day overview
+  openDay = k => {
+    if (!this.state.historyDay && !window.history.state?.blDay) {
+      try { window.history.pushState({ blDay: true }, '') } catch { /* history blocked — back just exits */ }
+    }
+    this.setState({ historyDay: k })
+  }
+  closeDay = () => {
+    // consume our entry so the button and the back gesture stay in step
+    if (this.state.historyDay && window.history.state?.blDay) return window.history.back()
+    this.setState({ historyDay: null })
+  }
+
   chip(on, tone) {
     return on ? { bg: tone || 'var(--ink)', border: tone || 'var(--ink)', fg: 'var(--bg)' }
               : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }
@@ -970,11 +992,11 @@ export default class App extends React.Component {
     for (let d = 6; d >= 0; d--) {
       const from = base.getTime() - d * DAY
       const n = live.filter(e => keys.includes(e.type) && e.t >= from && e.t < from + DAY).length
-      out.push({ n, day: d === 0 ? 'Today' : new Date(from).toLocaleDateString(undefined, { weekday: 'short' }) })
+      out.push({ n, key: dayKey(from), day: d === 0 ? 'Today' : new Date(from).toLocaleDateString(undefined, { weekday: 'short' }) })
     }
     const max = Math.max(...out.map(o => o.n), 1)
     return out.map((o, i) => ({
-      value: o.n, day: o.day,
+      value: o.n, day: o.day, onTap: () => this.openDay(o.key),
       h: Math.max(6, Math.round((o.n / max) * 100)) + '%',
       fill: i === 6 ? color : color.replace('0.075', '0.045'),
     }))
@@ -1017,7 +1039,6 @@ export default class App extends React.Component {
     }))
 
     // every day on the device, grouped for the History drill-down
-    const dayKey = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
     const fmtDay = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
     const byDay = new Map()
     for (const e of live) { const k = dayKey(e.t); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(e) }
@@ -1033,16 +1054,23 @@ export default class App extends React.Component {
       return p.join(' · ')
     }
     const historyDays = [...byDay.keys()].sort().reverse().map(k => ({
-      key: k, label: fmtDay(k), sub: daySummary(byDay.get(k)), onTap: () => this.setState({ historyDay: k }),
+      key: k, label: fmtDay(k), sub: daySummary(byDay.get(k)), onTap: () => this.openDay(k),
     }))
+    // day-by-day paging: back to the oldest logged day (gaps included), never
+    // past today — paging swaps the day in place, it doesn't stack history
+    const dayShift = (k, delta) => { const [y, m, d] = k.split('-').map(Number); return dayKey(new Date(y, m - 1, d + delta).getTime()) }
+    const todayKey = dayKey(Date.now())
+    const oldestKey = byDay.size ? [...byDay.keys()].sort()[0] : todayKey
     const dayEvs = s.historyDay ? byDay.get(s.historyDay) || [] : []
     const dayView = s.historyDay ? {
-      label: fmtDay(s.historyDay), sub: daySummary(dayEvs),
+      label: fmtDay(s.historyDay), sub: dayEvs.length ? daySummary(dayEvs) : 'nothing logged',
       rows: [...dayEvs].sort((a, b) => a.t - b.t).map(e => ({
         time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e, true),
         icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
       })),
-      back: () => this.setState({ historyDay: null }),
+      prev: s.historyDay > oldestKey ? () => this.setState({ historyDay: dayShift(s.historyDay, -1) }) : null,
+      next: s.historyDay < todayKey ? () => this.setState({ historyDay: dayShift(s.historyDay, 1) }) : null,
+      back: this.closeDay,
     } : null
 
     // hidden trackers drop out of the sheet, except while editing an old entry of that type
@@ -1408,6 +1436,10 @@ export default class App extends React.Component {
         tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
       },
       exportLog: this.exportLog, exportSummary: this.exportSummary,
+      exportRanges: [[7, '7 days'], [30, '30 days'], ['all', 'Everything']].map(([val, label]) => {
+        const on = s.exportRange === val
+        return { label, onTap: () => this.setState({ exportRange: val }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
+      }),
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode,
     }
@@ -1710,10 +1742,17 @@ export default class App extends React.Component {
                   <button type="button" onClick={v.dayView.back} className="hov-cream" style={S('width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0')}>
                     <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
                   </button>
-                  <div style={S('display:flex;flex-direction:column;gap:1px')}>
-                    <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>{v.dayView.label}</div>
+                  <div style={S('display:flex;flex-direction:column;gap:1px;min-width:0')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em;white-space:nowrap")}>{v.dayView.label}</div>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.dayView.sub}</div>
                   </div>
+                  <div style={S('flex:1')} />
+                  <button type="button" disabled={!v.dayView.prev} onClick={v.dayView.prev || undefined} className="hov-cream" style={S(`width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:${v.dayView.prev ? 'pointer' : 'default'};flex-shrink:0`)}>
+                    <Sym style={{ fontSize: 20, color: v.dayView.prev ? 'var(--muted)' : 'var(--faint)' }}>chevron_left</Sym>
+                  </button>
+                  <button type="button" disabled={!v.dayView.next} onClick={v.dayView.next || undefined} className="hov-cream" style={S(`width:38px;height:38px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.10);border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:${v.dayView.next ? 'pointer' : 'default'};flex-shrink:0`)}>
+                    <Sym style={{ fontSize: 20, color: v.dayView.next ? 'var(--muted)' : 'var(--faint)' }}>chevron_right</Sym>
+                  </button>
                 </>
               ) : (
                 <>
@@ -1775,11 +1814,11 @@ export default class App extends React.Component {
                 </div>
                 <div style={S('display:flex;align-items:flex-end;gap:8px;height:118px')}>
                   {v.feedBars.map((b, i) => (
-                    <div key={i} style={S('flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%;justify-content:flex-end')}>
+                    <button key={i} type="button" onClick={b.onTap} style={S('flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%;justify-content:flex-end;background:none;border:none;padding:0;cursor:pointer;font-family:inherit')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{b.value}</div>
                       <div style={S(`width:100%;border-radius:8px 8px 3px 3px;background:${b.fill};height:${b.h}`)} />
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;letter-spacing:0.08em;color:#A79E8B")}>{b.day}</div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -1795,11 +1834,11 @@ export default class App extends React.Component {
                 </div>
                 <div style={S('display:flex;align-items:flex-end;gap:8px;height:104px')}>
                   {v.diaperBars.map((b, i) => (
-                    <div key={i} style={S('flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%;justify-content:flex-end')}>
+                    <button key={i} type="button" onClick={b.onTap} style={S('flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%;justify-content:flex-end;background:none;border:none;padding:0;cursor:pointer;font-family:inherit')}>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{b.value}</div>
                       <div style={S(`width:100%;border-radius:8px 8px 3px 3px;background:${b.fill};height:${b.h}`)} />
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;letter-spacing:0.08em;color:#A79E8B")}>{b.day}</div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -2011,6 +2050,11 @@ export default class App extends React.Component {
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Share with your pediatrician</div>
+                <div style={S('display:flex;gap:6px;padding:4px 0 10px')}>
+                  {v.exportRanges.map((u, i) => (
+                    <button key={i} type="button" onClick={u.onTap} style={S(`flex:1;background:${u.bg};border:1px solid ${u.border};border-radius:999px;padding:8px 6px;font-family:inherit;font-size:12.5px;font-weight:600;color:${u.fg};cursor:pointer`)}>{u.label}</button>
+                  ))}
+                </div>
                 <button type="button" onClick={v.exportSummary} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 130)' }}>calendar_month</Sym>
                   <div style={S('flex:1;min-width:0')}>
