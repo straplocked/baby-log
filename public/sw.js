@@ -1,8 +1,10 @@
 /* Baby Log service worker — local-first app shell.
    Navigations: network-first, cache fallback (3am logging never waits on signal).
    Assets + fonts: cache-first with background fill. */
-const SHELL = 'babylog-shell-v1'
-const RUNTIME = 'babylog-rt-v1'
+// bumping these purges old caches on activate — v1 served unhashed files
+// (manifest included) cache-first forever, so installs kept minting stale
+const SHELL = 'babylog-shell-v2'
+const RUNTIME = 'babylog-rt-v2'
 
 self.addEventListener('install', () => self.skipWaiting())
 
@@ -54,18 +56,30 @@ self.addEventListener('fetch', e => {
   // never cache the API or the websocket auth — always live
   if (url.pathname.startsWith('/api') || url.pathname.startsWith('/app')) return
 
+  // the manifest drives WebAPK minting and the worker drives updates —
+  // both must always come from the network, never a cache
+  if (url.pathname === '/manifest.webmanifest' || url.pathname === '/sw.js') return
+
   const cacheable = url.origin === location.origin
     || url.hostname === 'fonts.googleapis.com'
     || url.hostname === 'fonts.gstatic.com'
   if (!cacheable) return
 
+  // content-hashed files can be trusted forever; everything else (art, icons,
+  // font css) serves stale and revalidates in the background
+  const hashed = url.pathname.startsWith('/assets/') || url.hostname === 'fonts.gstatic.com'
   e.respondWith(
-    caches.match(e.request).then(hit => hit || fetch(e.request).then(r => {
-      if (r.ok) {
-        const copy = r.clone()
-        caches.open(RUNTIME).then(c => c.put(e.request, copy))
-      }
-      return r
-    }))
+    caches.match(e.request).then(hit => {
+      if (hit && hashed) return hit
+      const refresh = fetch(e.request).then(r => {
+        if (r.ok) {
+          const copy = r.clone()
+          caches.open(RUNTIME).then(c => c.put(e.request, copy))
+        }
+        return r
+      })
+      if (hit) { refresh.catch(() => { /* offline — the hit stands */ }); return hit }
+      return refresh
+    })
   )
 })
