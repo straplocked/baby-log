@@ -1,6 +1,6 @@
 # Architecture
 
-Baby Log is three containers behind one nginx, built for exactly two grown-ups sharing one baby's log.
+Baby Log is three containers behind one nginx, built for one household sharing its babies' log — up to six grown-ups (parents and caregivers) and up to ten children.
 
 ```
                     ┌─────────────────────────────────────────────┐
@@ -25,7 +25,8 @@ The design brief: "Entries write locally first and sync when there's signal, so 
 
 - Every entry is `{id, type, t, detail, deleted}` with a **client-generated UUID**, written to `localStorage` (`babylog:v2`) instantly.
 - Changed ids go into an **outbox**; a debounced flush POSTs them to `/api/entries` (batch upsert, last-write-wins, server stamps a `rev`).
-- Pulls hit `GET /api/state?since=<rev>` — one endpoint returns everything needed to converge (user, partner, baby, duty, shift, changed entries).
+- Pulls hit `GET /api/state?since=<rev>` — one endpoint returns everything needed to converge (user, members, children, invites, duty, shift, changed entries — plus the legacy singular `partner`/`baby`/`invitePending` keys, kept so installed PWAs that predate multi-member keep working).
+- Every entry carries a `baby_id`; a client that omits it gets the primary (oldest) child on create, and an update without it never re-homes the entry — old single-child clients stay correct against a multi-child server.
 - **Deletes are tombstones** (`deleted: true`), so they sync like any other write; all views filter them.
 - Merge rule: server wins for any entry **not** currently in the outbox; unpushed local writes win until flushed.
 
@@ -50,19 +51,22 @@ HTTPS origin the app already needs.
   **prefs are per-user** (`users.notify_prefs`, edited in History →
   Notifications, synced through `/state` like everything else). Expired
   endpoints self-prune when a push bounces.
-- **Event pushes** fire inline from write endpoints: shift request / accept /
-  handback (on by default — a partner asking you to take over should reach a
-  sleeping phone, so these ignore quiet hours), a nursing/pump timer starting
-  (on by default but informational, so it honors quiet hours), and opt-in
-  partner activity ("Katrina logged a bottle", throttled to one per 10 min so
-  backfill bursts don't rattle anyone).
+- **Event pushes** fire inline from write endpoints, fanned out to every other
+  member: shift request / accept / handback (on by default — someone asking you
+  to take over should reach a sleeping phone, so these ignore quiet hours), a
+  nursing/pump timer starting (on by default but informational, so it honors
+  quiet hours), and opt-in member activity ("Katrina logged a bottle",
+  throttled to one per 10 min per recipient so backfill bursts don't rattle
+  anyone).
 - **Reminder pushes** come from `babylog:reminders`, run every minute by a
   `schedule:work` process the api container starts next to `artisan serve`:
-  feed gap (learned cluster-aware rhythm or a fixed interval, optionally only
-  while on duty), wake window (age-typical max from the baby's birth date),
-  a daily meds nudge, and the shift "until" ping (an active shift's
-  client-resolved `until_at` passes → both parents get one ping; nothing about
-  duty changes by itself). Each fires at most once per triggering feed / nap /
+  feed gap and wake window per non-archived child (learned cluster-aware rhythm
+  or a fixed interval, optionally only while on duty; wake windows use each
+  child's birth date; entries with a NULL `baby_id` read as the primary child),
+  a daily meds nudge (household-level), and the shift "until" ping (an active
+  shift's client-resolved `until_at` passes → the shift holder and the member
+  who asked for the cover get one ping each; nothing about duty changes by
+  itself). Each fires at most once per triggering feed / nap /
   day / shift — the dedupe lives in `users.notify_state` (and
   `shifts.until_notified_at` for the until ping), so restarts can't
   double-ping.
@@ -77,13 +81,14 @@ HTTPS origin the app already needs.
 
 Laravel 13, SQLite, Sanctum bearer tokens.
 
-- **Household model**: `households` owns everything; a user belongs to exactly one household; max 2 users (`config/babylog.php`). The partner is "the other user in my household".
-- **Invites**: `invite()` stores the invited email + a hashed single-use 6-char code; the code is shown once to the inviter and required at the partner's registration. See [docs/api.md](api.md#auth) for the full lockdown rules.
-- **Duty & shifts**: `households.on_duty_user_id` tracks who has the baby. A `shifts` row moves through `requested → active → completed`:
-  - `request` — on-duty parent asks the partner to take over (note attached).
-  - `accept` — partner starts their shift with a plan (drafted client-side from the feed rhythm) and an "until"; duty transfers.
+- **Household model**: `households` owns everything; a user belongs to exactly one household; max 6 users (`babylog.max_household_users`, `BABYLOG_MAX_USERS`) and 10 children (`babylog.max_children`). Every user has a role: **parent** (full control) or **caregiver** (may log entries, run timers, and take/hand back shifts; the household-shaping endpoints — `/baby`, `/children`, `/settings`, `/invite`, `/invite/revoke`, `/household/remove-member` — return 403). The first account on an instance is a parent. The legacy "partner" is now just the first other member (`Household::partnerOf`), kept for old clients and used only as a fallback.
+- **Children**: `babies` rows per household, id-ordered; the oldest is the *primary* child (what old clients call "the baby", and where entries without a `baby_id` land). Children are archived, never deleted — a child's log is history worth keeping.
+- **Invites**: a real `invites` table — email-bound, hashed single-use 6-char code, per-invite role, multiple concurrent, revocable. The code is shown once to the inviter and required at the invitee's registration; capacity counts members + outstanding invites. See [docs/api.md](api.md#auth) for the full lockdown rules.
+- **Duty & shifts**: household-level (not per child): `households.on_duty_user_id` tracks who has the kids. A `shifts` row moves through `requested → active → completed`:
+  - `request` — the on-duty member asks the others to take over (note attached; the ask fans out to every other member).
+  - `accept` — another member starts their shift with a plan (drafted client-side from the feed rhythm) and an "until"; duty transfers. A requester can't accept their own ask.
   - `plan` — replace the active shift's plan (e.g. "Add to plan").
-  - `handback` — shift completes with a note; duty returns; both clients can render the report **from synced entries** (the report is computed, not stored).
+  - `handback` — shift completes with a note; duty returns to the shift's stored `requester_id` (falling back to the first other member for self-started shifts); clients render the report **from synced entries** (the report is computed, not stored).
 - **Prediction is client-side**: smart prefill, feed-gap rhythm, and plan drafting all run in the frontend from the local entry cache — the server stores facts, not guesses.
 
 ## Security posture
@@ -102,5 +107,5 @@ Laravel 13, SQLite, Sanctum bearer tokens.
 | Client-generated entry ids | Offline writes merge without coordination; edits/deletes address the same id |
 | Tombstone deletes | Deletes must sync across devices like any write |
 | Reports computed from entries | No snapshot to drift out of sync; the log is the single source of truth |
-| SQLite | Two users per instance; zero ops; the whole DB is one backup-able file |
-| `artisan serve` + 8 workers in prod | Adequate for a 2-user appliance; swap for FPM/Octane if this ever becomes multi-tenant |
+| SQLite | A handful of users per instance; zero ops; the whole DB is one backup-able file |
+| `artisan serve` + 8 workers in prod | Adequate for a ≤6-user appliance; swap for FPM/Octane if this ever becomes multi-tenant |

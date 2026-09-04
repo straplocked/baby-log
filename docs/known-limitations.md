@@ -15,6 +15,16 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - **Offline indicator is subtle** (a small "· offline" in the header). ~~Queued-but-unsynced entries aren't visually marked~~ Fixed 2026-09-03: queued rows show a dimmed dot until the outbox flushes.
 - ~~**Toast/undo only covers the last added entry**; edits and deletes have no undo.~~ Fixed 2026-09-03: one-shot undo of the last action — add, edit (restores prior values), or delete (restore beats the synced tombstone, last write wins). Still only the single most recent action, and only while its toast is up.
 
+## Multi-member / multi-child edges (2026-09-04 batch)
+
+- **One active timer per household, even with twins.** Starting a second nursing timer replaces the first. The timer stores which child it's for (and the stop logs against that child), but the banner doesn't *name* the child yet.
+- **Feed reminders share one interval across children.** Each child keeps its own learned rhythm and dedupe, but a fixed `feedEvery` pref applies to every child alike; no per-child override. The daily meds nudge stays household-level (one dose tracked, not per child).
+- **Shifts are household-level** ("who has the kids"), not per child. The shift sheet's drafted plan and "Right now" rows read the currently selected child's rhythm; there's no explicit per-child or all-children framing in the sheet.
+- **Removed members lose their attribution chip.** Their entries keep `user_id` server-side, but the client can no longer resolve the name once they leave `members[]` — history rows render without the who-logged-it initial, and CSV exports name them only while the old cache lasts.
+- **No invite resend.** Regenerating a code for the same email is done by re-inviting it (which replaces the pending row); there's no one-tap resend.
+- **Member/child caps are mirrored as client constants** (6 / 10). `/state` doesn't expose the server's configured caps, so an instance overriding `BABYLOG_MAX_USERS` sees the invite row hide at the wrong seat count (or leans on the server's 422 toast).
+- **Timer stop and `/shifts/plan` have no ownership checks** (any member can stop the household timer; plan replaces only your own active shift) — unchanged pre-batch behavior, noted in case it wants tightening.
+
 ## Shift-system edges
 
 - ~~The **incoming-request card** shows the *predicted* plan chips (computed from rhythm), while the accept sheet lets you toggle items — subtle mismatch if you toggle before accepting.~~ Fixed 2026-09-03: the card previews exactly the plan the accept sheet opens with.
@@ -30,5 +40,5 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - ~~**Sanctum tokens never expire**; each login adds a row. Add expiry + pruning eventually.~~ Fixed 2026-09-03: tokens expire after 90 days (`sanctum.expiration`) and `sanctum:prune-expired` reaps week-old expired rows daily via the existing scheduler. Note: expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
 - **No admin/first-user tooling**: wiping data is the only way to un-claim an instance (`babylog-reset-data`).
 - nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
-- Frontend has no test suite (the API has 52 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
+- Frontend has no test suite (the API has 73 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.

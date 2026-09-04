@@ -82,22 +82,23 @@ URL exists).
 
 **Title:**
 
-> [Support] Baby Log — self-hosted baby tracker for two parents (offline PWA, realtime sync, shift handoffs)
+> [Support] Baby Log — self-hosted baby tracker for your household (offline PWA, realtime sync, shift handoffs)
 
 **Body:**
 
 > This is the support thread for the **Baby Log** Community Apps template.
 >
-> Baby Log is a baby tracker built for exactly two parents sharing one baby's log, running
-> entirely on your server — one container, one SQLite file, no cloud account, no telemetry.
+> Baby Log is a baby tracker built for one household sharing its babies' log — parents plus the
+> caregivers they trust — running entirely on your server: one container, one SQLite file, no
+> cloud account, no telemetry.
 >
 > **What it does**
 > - **Three taps from pocket to logged.** The entry sheet opens pre-stamped with the current time
 >   and a prediction of what you're about to log (alternating nursing sides, last bottle amount,
 >   feed-vs-diaper rhythm). Overriding the guess costs one tap.
-> - **Both of you, one log.** The second parent joins by invite and sees the same log live over
->   websockets. Entries write locally first and sync when there's signal — 3am logging never waits
->   on the network.
+> - **The whole household, one log.** Everyone joins by invite — as a parent (full control) or a
+>   caregiver (logs and covers shifts) — and sees the same log live over websockets. Entries write
+>   locally first and sync when there's signal — 3am logging never waits on the network.
 > - **Shift handoffs.** "I need to sleep, take him" is a first-class flow: request with a note,
 >   accept with an auto-drafted plan from the baby's rhythm, hand back with a summary.
 > - Installable PWA, Now/History views, 7-day charts, sleep/nursing/pump timers, CSV export for
@@ -116,11 +117,11 @@ URL exists).
 > - Invite emails need SMTP (`MAIL_*` appended to `/data/.env`); without it the app shows a
 >   shareable invite code instead, so email is optional.
 >
-> **Honest scope:** it's built for two adults and one baby per instance — no multi-baby support,
-> no custom entry types, and the stats window is 7 days (with day-by-day drill-down). If you need
-> a many-user, many-child tracker, Baby Buddy may fit better; this one optimizes for offline
-> logging, live partner sync, and the two-parent handoff. (Switching over? Settings can import a
-> Baby Buddy CSV export.)
+> **Honest scope:** it's built for one household per instance — up to six adults (parent and
+> caregiver roles) and up to ten children — with no custom entry types, and a 7-day stats window
+> (with day-by-day drill-down). If you need growth charts or a broader tracker, Baby Buddy may
+> fit better; this one optimizes for offline logging, live household sync, and the shift handoff.
+> (Switching over? Settings can import a Baby Buddy CSV export.)
 >
 > Source (AGPL): https://github.com/straplocked/baby-log — bugs are best as GitHub issues, but
 > this thread works too.

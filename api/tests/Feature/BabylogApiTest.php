@@ -798,6 +798,41 @@ class BabylogApiTest extends TestCase
         $this->assertSame('granny@example.com', $state['invitePending']);
     }
 
+    /**
+     * The one list every parent-only endpoint must appear on. A new
+     * household-shaping endpoint joins this map or a caregiver can reach it.
+     */
+    private const PARENT_ONLY_ENDPOINTS = [
+        '/api/baby' => ['name' => 'Hijack'],
+        '/api/children' => ['name' => 'Hijack'],
+        '/api/settings' => ['unit' => 'ml'],
+        '/api/invite' => ['email' => 'mole@example.com'],
+        '/api/invite/revoke' => ['email' => 'katrina@example.com'],
+        '/api/household/remove-member' => ['user_id' => 1],
+    ];
+
+    public function test_every_parent_only_endpoint_403s_a_caregiver(): void
+    {
+        [$ben, , $doula] = $this->threeMemberHousehold();
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+
+        foreach (self::PARENT_ONLY_ENDPOINTS as $path => $payload) {
+            $this->assertSame(
+                403,
+                $this->postJson($path, $payload, $this->authed($doula))->getStatusCode(),
+                $path.' let a caregiver through',
+            );
+        }
+
+        // and none of the attempts left a mark
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertSame('Maddux', $state['baby']['name']);
+        $this->assertSame(1, count($state['children']));
+        $this->assertSame([], $state['invites']);
+        $this->assertSame(3, count($state['members']));
+        $this->assertNull($state['settings']['unit'] ?? null);
+    }
+
     public function test_a_caregiver_cannot_manage_the_household_but_can_log(): void
     {
         [, , $doula] = $this->threeMemberHousehold();

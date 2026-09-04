@@ -23,7 +23,8 @@ Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed
 
 - Entries: client-generated UUID ids, tombstone deletes, outbox → batch push, `GET /state?since=` pull. Server never invents entry state; last write wins.
 - Realtime is **poke-to-pull**: broadcast `HouseholdTouched` (via its best-effort `::send()`, never raw `broadcast()`), client re-pulls `/state`. Never broadcast data payloads.
-- Every new write endpoint needs: auth + the 120/min throttle group, household scoping through `$request->user()->household`, a `HouseholdTouched::send()`, and a feature test in `api/tests/Feature/BabylogApiTest.php`.
+- Every new write endpoint needs: auth + the 120/min throttle group, household scoping through `$request->user()->household`, a `HouseholdTouched::send()`, and a feature test in `api/tests/Feature/BabylogApiTest.php`. Parent-only endpoints also join `PARENT_ONLY_ENDPOINTS` in that test (the caregiver-403 sweep).
+- **Old-client compat is an invariant** (installed PWAs hit the new server before their JS updates): `/state` keeps the legacy singular `baby` (= primary child), `partner` (= first other member), and `invitePending` keys; `POST /entries` without `baby_id` defaults to the primary child on CREATE only and never re-homes an existing entry on update; a null `baby_id` always reads as the primary child.
 
 ## Deploy
 

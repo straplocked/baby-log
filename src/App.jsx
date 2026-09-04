@@ -170,8 +170,10 @@ const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'invi
   // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
   'children', 'members', 'selectedChildId',
   // invites[] syncs like members; inviteCodeFor remembers which pending invite
-  // the cached inviteCode belongs to (codes are shown once, only to the inviter)
-  'invites', 'inviteCodeFor']
+  // the cached inviteCode belongs to (codes are shown once, only to the inviter).
+  // inviteRole rides with inviteField so a reload mid-invite can't silently
+  // downgrade a chosen caregiver seat back to parent
+  'invites', 'inviteCodeFor', 'inviteRole']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
