@@ -15,6 +15,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Account provisioner
+    |--------------------------------------------------------------------------
+    | The class that handles registrations without an invite. The default
+    | enforces the policy above: first account claims the instance, everyone
+    | else needs an invite (or open registration). Point this at your own
+    | App\Contracts\AccountProvisioner implementation to change the policy —
+    | e.g. provisioning a fresh household per signup.
+    */
+
+    'account_provisioner' => App\Services\InstanceClaimProvisioner::class,
+
+    /*
+    |--------------------------------------------------------------------------
     | Household size
     |--------------------------------------------------------------------------
     | How many grown-ups (parents + caregivers) one log holds; pending invites

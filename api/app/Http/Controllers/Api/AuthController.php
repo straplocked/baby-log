@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Contracts\AccountProvisioner;
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
 use App\Mail\PasswordResetLink;
@@ -9,6 +10,7 @@ use App\Models\Household;
 use App\Models\Invite;
 use App\Models\User;
 use App\Support\AppMail;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -18,7 +20,7 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function register(Request $request): JsonResponse
+    public function register(Request $request, AccountProvisioner $provisioner): JsonResponse
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:100'],
@@ -32,12 +34,6 @@ class AuthController extends Controller
         // but only with the single-use code the inviter was shown
         $invite = Invite::where('email', $data['email'])->first();
 
-        // invite-only by default: first account or invited emails, nothing else
-        if (! $invite && ! config('babylog.open_registration') && User::count() > 0) {
-            throw ValidationException::withMessages([
-                'email' => ['This Baby Log is invite-only. Ask your partner to invite this exact email.'],
-            ]);
-        }
         if ($invite) {
             $code = strtoupper(preg_replace('/[^a-z0-9]/i', '', (string) ($data['invite'] ?? '')));
             if ($code === '' || ! hash_equals((string) $invite->code_hash, hash('sha256', $code))) {
@@ -52,7 +48,11 @@ class AuthController extends Controller
             }
         }
 
-        $household = $invite?->household ?? Household::create();
+        // no invite: the provisioner decides whether the registration may
+        // proceed and where it lands — the default keeps the appliance
+        // invite-only after the first account claims the instance
+        // (config/babylog.php: account_provisioner)
+        $household = $invite?->household ?? $provisioner->provision($data['email']);
 
         $user = User::create([
             'name' => $data['name'],
@@ -64,6 +64,11 @@ class AuthController extends Controller
         ]);
 
         $invite?->delete(); // single-use: the seat is taken
+
+        // standard Laravel hook — lets anything layered on the app react to a
+        // fresh account (verification mail, hosted provisioning) without a
+        // controller change
+        event(new Registered($user));
 
         if (! $household->on_duty_user_id) {
             $household->update(['on_duty_user_id' => $user->id]);

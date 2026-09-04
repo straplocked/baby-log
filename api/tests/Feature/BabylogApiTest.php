@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Contracts\AccountProvisioner;
 use App\Mail\PartnerInvite;
 use App\Mail\PasswordResetLink;
+use App\Models\Household;
 use App\Models\Invite;
 use App\Models\Shift;
 use App\Models\User;
@@ -43,6 +45,20 @@ class BabylogApiTest extends TestCase
         $this->register('Ben', 'ben@example.com')->assertCreated();
         $this->register('Mallory', 'mallory@example.com')->assertStatus(422);
         $this->assertSame(1, User::count());
+    }
+
+    public function test_account_provisioner_is_swappable_via_config(): void
+    {
+        // a hosted-style policy: every uninvited signup gets its own household
+        config(['babylog.account_provisioner' => FreshHouseholdProvisioner::class]);
+
+        $this->register('Ben', 'ben@example.com')->assertCreated();
+        $this->register('Ada', 'ada@example.com')->assertCreated();
+
+        $this->assertNotSame(
+            User::where('email', 'ben@example.com')->firstOrFail()->household_id,
+            User::where('email', 'ada@example.com')->firstOrFail()->household_id,
+        );
     }
 
     public function test_invited_email_joins_the_household_with_code(): void
@@ -1062,5 +1078,15 @@ class BabylogApiTest extends TestCase
         $state = $this->getJson('/api/state', $this->authed($ben))->json();
         $this->assertSame('requested', $state['shift']['state']);
         $this->assertSame($benId, $state['onDutyUserId']);
+    }
+}
+
+// used by test_account_provisioner_is_swappable_via_config — lives here because
+// the app ships no second AccountProvisioner implementation
+class FreshHouseholdProvisioner implements AccountProvisioner
+{
+    public function provision(string $email): Household
+    {
+        return Household::create();
     }
 }
