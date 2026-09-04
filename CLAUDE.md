@@ -1,4 +1,4 @@
-# Baby Log — project conventions
+# mybabynotes — project conventions
 
 Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed on Unraid. Read [docs/architecture.md](docs/architecture.md) before structural changes.
 

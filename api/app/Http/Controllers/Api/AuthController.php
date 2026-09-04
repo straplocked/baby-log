@@ -35,7 +35,7 @@ class AuthController extends Controller
         // invite-only by default: first account or invited emails, nothing else
         if (! $invite && ! config('babylog.open_registration') && User::count() > 0) {
             throw ValidationException::withMessages([
-                'email' => ['This Baby Log is invite-only. Ask your partner to invite this exact email.'],
+                'email' => ['This mybabynotes is invite-only. Ask your partner to invite this exact email.'],
             ]);
         }
         if ($invite) {

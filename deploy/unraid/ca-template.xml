@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  Unraid Community Apps template for the all-in-one Baby Log image
+  Unraid Community Apps template for the all-in-one mybabynotes image
   (deploy/aio/Dockerfile). One container: nginx serves the PWA on port 80 and
   proxies /api (Laravel) and /app (Reverb websockets) to loopback; supervisord
   runs the lot. All state lives in the /data volume (SQLite + a self-generated
@@ -10,7 +10,7 @@
   Submission steps + support-thread draft: docs/ca-submission.md
 -->
 <Container version="2">
-  <Name>baby-log</Name>
+  <Name>mybabynotes</Name>
   <Repository>ghcr.io/straplocked/baby-log-aio:latest</Repository>
   <Registry>https://github.com/straplocked/baby-log/pkgs/container/baby-log-aio</Registry>
   <Network>bridge</Network>

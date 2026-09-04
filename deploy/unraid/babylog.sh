@@ -1,5 +1,5 @@
 #!/bin/sh
-# Baby Log — Unraid install/update script.
+# mybabynotes — Unraid install/update script.
 #
 # First run:  installs to /mnt/user/appdata/baby-log, generates secrets, starts the stack.
 # Re-run:     pulls the latest release from GitHub and rebuilds. Data survives in ./data.
@@ -96,4 +96,4 @@ docker compose -p baby-log --env-file "$BASE/.env" -f "$BASE/src/deploy/unraid/d
 docker image prune -f >/dev/null 2>&1 || true
 
 PORT=$(sed -n 's/^APP_PORT=//p' "$BASE/.env")
-echo "==> done — Baby Log is on port ${PORT:-3500}. Re-run this script any time to update."
+echo "==> done — mybabynotes is on port ${PORT:-3500}. Re-run this script any time to update."

@@ -1,4 +1,4 @@
-# Submitting Baby Log to Unraid Community Apps
+# Submitting mybabynotes to Unraid Community Apps
 
 The template is [deploy/unraid/ca-template.xml](../deploy/unraid/ca-template.xml). It consumes the
 all-in-one image `ghcr.io/straplocked/baby-log-aio:latest` (built by
@@ -51,7 +51,7 @@ Start with the in-repo path; switch only if review feedback asks for it.
 3. Wait for moderation. Moderators check that the image is public, the template parses, the icon
    loads, and the Overview isn't spam. Respond to feedback in the submission thread.
 4. After approval the appfeed picks the template up on its next scan (a couple of hours). Search
-   "Baby Log" in CA on a test server to confirm.
+   "mybabynotes" in CA on a test server to confirm.
 5. **Ongoing:** template fixes are just pushes to `main` (the feed re-scans). App updates ship by
    tagging releases — `release.yml` owns `:latest`, so CA's "update available" tracking works
    without touching the template.
@@ -82,13 +82,13 @@ URL exists).
 
 **Title:**
 
-> [Support] Baby Log — self-hosted baby tracker for your household (offline PWA, realtime sync, shift handoffs)
+> [Support] mybabynotes — self-hosted baby tracker for your household (offline PWA, realtime sync, shift handoffs)
 
 **Body:**
 
-> This is the support thread for the **Baby Log** Community Apps template.
+> This is the support thread for the **mybabynotes** Community Apps template.
 >
-> Baby Log is a baby tracker built for one household sharing its babies' log — parents plus the
+> mybabynotes is a baby tracker built for one household sharing its babies' log — parents plus the
 > caregivers they trust — running entirely on your server: one container, one SQLite file, no
 > cloud account, no telemetry.
 >

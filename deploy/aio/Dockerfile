@@ -49,7 +49,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data /run/nginx
 # deploy/unraid/docker-compose.yml). Secrets are NOT here — they are
 # generated into /data/.env on first boot. Anything below can still be
 # overridden per-container (real env beats the .env file in Laravel).
-ENV APP_NAME="Baby Log" \
+ENV APP_NAME="mybabynotes" \
     APP_ENV=production \
     APP_DEBUG=false \
     LOG_CHANNEL=stderr \

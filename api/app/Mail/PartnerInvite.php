@@ -24,8 +24,8 @@ class PartnerInvite extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            from: new Address(config('mail.from.address'), 'Baby Log'),
-            subject: $this->inviterName.' saved you a seat on Baby Log',
+            from: new Address(config('mail.from.address'), 'mybabynotes'),
+            subject: $this->inviterName.' saved you a seat on mybabynotes',
         );
     }
 

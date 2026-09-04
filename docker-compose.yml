@@ -1,5 +1,5 @@
 x-laravel-env: &laravel-env
-  APP_NAME: "Baby Log"
+  APP_NAME: "mybabynotes"
   APP_ENV: production
   APP_DEBUG: "false"
   # set in the git-ignored .env — generate with: echo "base64:$(openssl rand -base64 32)"

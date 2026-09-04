@@ -27,8 +27,8 @@ class PasswordResetLink extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            from: new Address(config('mail.from.address'), 'Baby Log'),
-            subject: 'Reset your Baby Log password',
+            from: new Address(config('mail.from.address'), 'mybabynotes'),
+            subject: 'Reset your mybabynotes password',
         );
     }
 

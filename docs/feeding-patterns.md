@@ -1,6 +1,6 @@
 # Feeding & sleep patterns, birth to 3 years
 
-Reference for the age-aware pieces of Baby Log — the `WAKE_NORMS` / `FEED_NORMS` tables in [src/App.jsx](../src/App.jsx) are distilled from this document. All numbers are population-typical guidance from the cited sources, **not medical advice**, and the app must always phrase them as context ("typical at 7 wks"), never as targets. Where sources disagree, both figures are given and flagged with ⚠.
+Reference for the age-aware pieces of mybabynotes — the `WAKE_NORMS` / `FEED_NORMS` tables in [src/App.jsx](../src/App.jsx) are distilled from this document. All numbers are population-typical guidance from the cited sources, **not medical advice**, and the app must always phrase them as context ("typical at 7 wks"), never as targets. Where sources disagree, both figures are given and flagged with ⚠.
 
 Compiled 2026-09-02 from CDC, AAP/healthychildren.org, AASM, WIC/USDA, La Leche League, KellyMom, Nemours KidsHealth, Huckleberry, and Taking Cara Babies (full URLs at the bottom).
 

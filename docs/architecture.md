@@ -1,6 +1,6 @@
 # Architecture
 
-Baby Log is three containers behind one nginx, built for one household sharing its babies' log — up to six grown-ups (parents and caregivers) and up to ten children.
+mybabynotes is three containers behind one nginx, built for one household sharing its babies' log — up to six grown-ups (parents and caregivers) and up to ten children.
 
 ```
                     ┌─────────────────────────────────────────────┐

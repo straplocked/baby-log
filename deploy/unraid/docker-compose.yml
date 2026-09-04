@@ -1,8 +1,8 @@
-# Baby Log on Unraid — run via deploy/unraid/babylog.sh (handles .env secrets,
+# mybabynotes on Unraid — run via deploy/unraid/babylog.sh (handles .env secrets,
 # source updates, and rebuilds). Only the app port is published; API and Reverb
 # stay internal behind the app container's nginx.
 x-laravel-env: &laravel-env
-  APP_NAME: "Baby Log"
+  APP_NAME: "mybabynotes"
   APP_ENV: production
   APP_DEBUG: "false"
   APP_KEY: ${APP_KEY}

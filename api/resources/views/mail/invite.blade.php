@@ -11,4 +11,4 @@ Your invite code: {{ $code }}
 
 The code works once, and only for this address. Not expecting this? Just ignore it.
 
-— Baby Log
+— mybabynotes

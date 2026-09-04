@@ -1,6 +1,6 @@
 {
-  "name": "Baby Log",
-  "short_name": "Baby Log",
+  "name": "mybabynotes",
+  "short_name": "mybabynotes",
   "description": "Three taps from pocket to logged. Both of you, one log.",
   "start_url": "/",
   "scope": "/",
