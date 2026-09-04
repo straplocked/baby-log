@@ -19,6 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // TLS terminates at the reverse proxy (nginx / NPM)
         $middleware->trustProxies(at: '*');
+
+        // API-only app: no login page exists. The framework default redirects
+        // guests to route('login'), which throws RouteNotFoundException (a 500)
+        // for header-less probes; null lets the 401 render as JSON instead.
+        $middleware->redirectGuestsTo(fn () => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

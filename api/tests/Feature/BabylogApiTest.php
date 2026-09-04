@@ -468,6 +468,14 @@ class BabylogApiTest extends TestCase
         $this->getJson('/api/state')->assertStatus(401);
     }
 
+    public function test_unauthenticated_api_request_without_accept_header_gets_json_401(): void
+    {
+        // curl/health-check probes send no Accept header; without the api/*
+        // shouldRenderJsonWhen rule Laravel would try to redirect to a
+        // nonexistent 'login' route and 500 instead
+        $this->get('/api/state')->assertStatus(401);
+    }
+
     // ── timers ────────────────────────────────────────────────────────────────
 
     public function test_timer_start_and_stop_sync_to_the_household(): void
