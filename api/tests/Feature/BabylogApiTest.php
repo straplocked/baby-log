@@ -4,7 +4,9 @@ namespace Tests\Feature;
 
 use App\Mail\PartnerInvite;
 use App\Mail\PasswordResetLink;
+use App\Models\Shift;
 use App\Models\User;
+use App\Services\PushService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
@@ -385,6 +387,76 @@ class BabylogApiTest extends TestCase
         $this->assertSame($katId, $state['onDutyUserId']);
         // the stale ask must not survive to render a phantom "Ben is handing off" card
         $this->assertNotSame('requested', $state['shift']['state']);
+    }
+
+    /** Container-bound push recorder: no subscriptions or transport needed. */
+    private function fakePush(): object
+    {
+        $fake = new class extends PushService
+        {
+            public array $sent = [];
+
+            public function notify(User $user, string $tag, string $title, string $body): void
+            {
+                $this->sent[] = ['user_id' => $user->id, 'tag' => $tag, 'title' => $title, 'body' => $body];
+            }
+        };
+        $this->app->instance(PushService::class, $fake);
+
+        return $fake;
+    }
+
+    public function test_until_ping_notifies_both_parents_exactly_once(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+        $benId = $this->getJson('/api/state', $this->authed($ben))->json('user.id');
+        $katId = $this->getJson('/api/state', $this->authed($kat))->json('user.id');
+
+        // Katrina takes over "until 6 AM" — an until-time already in the past
+        $this->postJson('/api/shifts/accept', [
+            'plan' => [], 'until' => 'Until 6 AM', 'until_at' => now()->getTimestampMs() - 60000,
+        ], $this->authed($kat))->assertOk();
+
+        $fake = $this->fakePush();
+        $this->artisan('babylog:reminders')->assertSuccessful();
+
+        // both parents got exactly one ping each: holder asked to hand back,
+        // partner told the shift is up (decision locked: ping BOTH)
+        $this->assertCount(2, $fake->sent);
+        $holderPing = collect($fake->sent)->firstWhere('user_id', $katId);
+        $partnerPing = collect($fake->sent)->firstWhere('user_id', $benId);
+        $this->assertSame('Shift over — hand back?', $holderPing['title']);
+        $this->assertSame('Katrina’s shift is up', $partnerPing['title']);
+
+        // the marker is set, and nothing about the shift state changed by itself
+        $this->assertNotNull(Shift::sole()->until_notified_at);
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertSame($katId, $state['onDutyUserId']);
+        $this->assertSame('active', $state['shift']['state']);
+
+        // the command runs every minute — a second tick must not ping again
+        $this->artisan('babylog:reminders')->assertSuccessful();
+        $this->assertCount(2, $fake->sent);
+    }
+
+    public function test_until_ping_waits_for_the_until_time(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        // an until-time still an hour out, and no ping fires
+        $this->postJson('/api/shifts/accept', [
+            'plan' => [], 'until' => 'Until 6 AM', 'until_at' => now()->getTimestampMs() + 3600000,
+        ], $this->authed($kat))->assertOk();
+
+        $fake = $this->fakePush();
+        $this->artisan('babylog:reminders')->assertSuccessful();
+
+        $this->assertCount(0, $fake->sent);
+        $this->assertNull(Shift::sole()->until_notified_at);
     }
 
     // ── account (name / email / password) ─────────────────────────────────────

@@ -74,7 +74,13 @@ class ShiftController extends Controller
     /** "I've got him" — start my shift (accepts a pending request if one exists). */
     public function accept(Request $request): JsonResponse
     {
-        $data = $request->validate([...self::PLAN_RULES, 'until' => ['nullable', 'string', 'max:60']]);
+        $data = $request->validate([
+            ...self::PLAN_RULES,
+            'until' => ['nullable', 'string', 'max:60'],
+            // client-resolved ms epoch for clock-time "until" labels; numeric,
+            // not integer, for the same fractional-ms tolerance as plan.at
+            'until_at' => ['nullable', 'numeric'],
+        ]);
 
         $user = $request->user();
         $household = $user->household;
@@ -88,6 +94,8 @@ class ShiftController extends Controller
             'user_id' => $user->id,
             'plan' => $this->intPlan($data['plan'] ?? null),
             'until' => $data['until'] ?? null,
+            'until_at' => isset($data['until_at']) ? (int) round($data['until_at']) : null,
+            'until_notified_at' => null, // a fresh acceptance re-arms the once-only "shift over" ping
             'started_at' => now()->getTimestampMs(),
         ])->save();
 
