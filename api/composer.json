@@ -2,7 +2,7 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "straplocked/baby-log-api",
     "type": "project",
-    "description": "Baby Log API — sync, shifts, timers, and push for a two-parent baby log.",
+    "description": "mybabynotes API — sync, shifts, timers, and push for a two-parent baby log.",
     "keywords": [
         "laravel",
         "framework"

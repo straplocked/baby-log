@@ -17,7 +17,7 @@ class InstanceClaimProvisioner implements AccountProvisioner
     {
         if (! config('babylog.open_registration') && User::count() > 0) {
             throw ValidationException::withMessages([
-                'email' => ['This Baby Log is invite-only. Ask your partner to invite this exact email.'],
+                'email' => ['This mybabynotes is invite-only. Ask your partner to invite this exact email.'],
             ]);
         }
 

@@ -64,7 +64,7 @@ class TimerController extends Controller
                     $other,
                     'timer',
                     $title,
-                    'Timer running in Baby Log.',
+                    'Timer running in mybabynotes.',
                 );
             }
         }

@@ -72,7 +72,7 @@ class ShiftController extends Controller
         $this->pushHandoffToAll(
             $household->othersFor($request->user()),
             $request->user()->name.' is asking you to take over',
-            ($data['note'] ?? null) ?: 'Open Baby Log to see the handoff.',
+            ($data['note'] ?? null) ?: 'Open mybabynotes to see the handoff.',
         );
 
         HouseholdTouched::send($household->id, 'shift');

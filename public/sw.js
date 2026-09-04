@@ -1,4 +1,4 @@
-/* Baby Log service worker — local-first app shell.
+/* mybabynotes service worker — local-first app shell.
    Navigations: network-first, cache fallback (3am logging never waits on signal).
    Assets + fonts: cache-first with background fill. */
 // bumping these purges old caches on activate — v1 served unhashed files
@@ -20,7 +20,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('push', e => {
   let d = {}
   try { d = e.data ? e.data.json() : {} } catch { /* non-JSON push — show the shell */ }
-  e.waitUntil(self.registration.showNotification(d.title || 'Baby Log', {
+  e.waitUntil(self.registration.showNotification(d.title || 'mybabynotes', {
     body: d.body || '',
     tag: d.tag || 'babylog', // same-kind pushes replace, they don't stack
     icon: '/icons/icon-192.png',

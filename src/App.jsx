@@ -1206,7 +1206,7 @@ export default class App extends React.Component {
     const day = new Date().toISOString().slice(0, 10)
     // exports read live(), so the file carries the selected child's name
     const name = this.selChild()?.name || this.state.babyName || ''
-    return ['baby-log', name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), kind, day].filter(Boolean).join('-') + '.csv'
+    return ['mybabynotes', name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), kind, day].filter(Boolean).join('-') + '.csv'
   }
   exportLog = () => {
     this.shareCsv(this.exportName('full'), [
@@ -1987,7 +1987,7 @@ export default class App extends React.Component {
           pushOn: s.pushOn,
           togglePush: this.togglePush,
           pushHint: !pushSupported()
-            ? 'This browser can’t do push — on iPhone, add Baby Log to the Home Screen first, then look here again.'
+            ? 'This browser can’t do push — on iPhone, add mybabynotes to the Home Screen first, then look here again.'
             : s.pushOn ? 'This phone gets pings. Pick what’s worth one below — each grown-up sets their own.'
             : 'Flip it on and allow the permission — then pick what’s worth a ping.',
           rows: [
@@ -2198,7 +2198,7 @@ export default class App extends React.Component {
             <div style={S('width:168px;height:168px;border-radius:999px;background:#FFFDF8;box-shadow:0 14px 40px rgba(38,35,29,0.12);display:flex;align-items:center;justify-content:center')}>
               <Duck size={116} />
             </div>
-            <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:40px;letter-spacing:-0.03em;color:var(--accent-deep);padding-top:26px")}>Baby Log</div>
+            <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:40px;letter-spacing:-0.03em;color:var(--accent-deep);padding-top:26px")}>mybabynotes</div>
             <div style={S('font-size:16.5px;line-height:1.45;color:#6E6659;text-align:center;padding-top:8px;text-wrap:pretty;max-width:260px')}>Three taps, then back to the baby.<br />Both of you, one log.</div>
             <div style={S('flex:1.2')} />
             <button type="button" onClick={v.goSignup} className="hov-olive" style={S('width:100%;height:60px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(var(--accent-rgb),0.3)')}>
@@ -2219,7 +2219,7 @@ export default class App extends React.Component {
               </button>
               <div style={S('display:flex;align-items:center;gap:6px')}>
                 <Duck size={30} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>Baby Log</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
               </div>
               <div style={S('width:38px')} />
             </div>
@@ -2284,7 +2284,7 @@ export default class App extends React.Component {
               </button>
               <div style={S('display:flex;align-items:center;gap:6px')}>
                 <Duck size={30} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>Baby Log</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
               </div>
               <div style={S('width:38px')} />
             </div>
@@ -2310,7 +2310,7 @@ export default class App extends React.Component {
             <div style={S('padding:6px 0 34px')}>
               <div style={S('display:flex;align-items:center;gap:6.4px')}>
                 <Duck size={32} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:19px;letter-spacing:-0.02em;color:var(--accent-deep)")}>Baby Log</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:19px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
               </div>
             </div>
             <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:32px;line-height:1.1;letter-spacing:-0.025em;text-wrap:pretty")}>Who are we keeping track of?</div>

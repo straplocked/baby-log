@@ -1,6 +1,6 @@
-# Baby Log 🐤
+# mybabynotes 🐤
 
-**Your baby's data on your own server.** Baby Log is a self-hosted baby tracker built for one household sharing its babies' log — two parents, or parents plus the caregivers they trust — with true realtime sync between every phone, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
+**Your baby's data on your own server.** mybabynotes is a self-hosted baby tracker built for one household sharing its babies' log — two parents, or parents plus the caregivers they trust — with true realtime sync between every phone, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
 
 <!-- screenshots:start -->
 <p align="center">
@@ -24,9 +24,9 @@
 
 ## Honest comparison: Baby Buddy
 
-[Baby Buddy](https://github.com/babybuddy/babybuddy) is the established self-hosted baby tracker, and if you need breadth it's the mature choice. Baby Log exists because of two gaps its own tracker has carried for years: no offline/PWA support and no realtime sync between caregivers' phones.
+[Baby Buddy](https://github.com/babybuddy/babybuddy) is the established self-hosted baby tracker, and if you need breadth it's the mature choice. mybabynotes exists because of two gaps its own tracker has carried for years: no offline/PWA support and no realtime sync between caregivers' phones.
 
-| | Baby Log | Baby Buddy |
+| | mybabynotes | Baby Buddy |
 |---|---|---|
 | Offline logging | Local-first PWA — entries queue and sync later | Needs a connection |
 | Realtime partner sync | Live over websockets, both phones converge instantly | Refresh to see the other phone's entries |
@@ -37,13 +37,13 @@
 | Languages | English only (so far) | 9 years of i18n, many languages |
 | License | AGPL-3.0 | BSD-2-Clause |
 
-If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. Baby Log optimizes for a narrower job: exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
+If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. mybabynotes optimizes for a narrower job: exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
 
 ## Install
 
 ### 1. Unraid (Community Apps)
 
-Baby Log ships an all-in-one image (`ghcr.io/straplocked/baby-log-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, so until it appears in the store you can install it manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
+mybabynotes ships an all-in-one image (`ghcr.io/straplocked/baby-log-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, so until it appears in the store you can install it manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
 
 First boot generates every secret into `/data/.env` — nothing to configure on the LAN. Back up the one appdata folder and you've backed up the app. Pin a version by changing the repository tag from `:latest` to `:v1.0.0`.
 
@@ -100,6 +100,6 @@ Releases are tagged: a `v*` tag runs the test suite, publishes `ghcr.io/straploc
 
 ## License
 
-Baby Log's code is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). Copyright © 2026 Chris Carvache.
+mybabynotes' code is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). Copyright © 2026 Chris Carvache.
 
-You can self-host it, modify it, and redistribute it under the AGPL's terms. The **Baby Log name** and any **hosted Baby Log service** are not covered by the code license — if you distribute a modified version or run a public instance, please make clear it's your build, not the official project.
+You can self-host it, modify it, and redistribute it under the AGPL's terms. The **mybabynotes name** and any **hosted mybabynotes service** are not covered by the code license — if you distribute a modified version or run a public instance, please make clear it's your build, not the official project.
