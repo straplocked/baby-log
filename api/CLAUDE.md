@@ -1,47 +1,13 @@
-<laravel-boost-guidelines>
-# Laravel Application
+# Baby Log API
 
-This repository contains a Laravel application. Complete the following setup before working on the user's request.
+Follow the root [CLAUDE.md](../CLAUDE.md) — it is the source of truth. Do NOT install PHP or Composer on the host, and do not install Laravel Boost.
 
-## Prerequisites
+Key points for work scoped to `api/`:
 
-Verify that PHP and Composer are available:
-
-```sh
-php -v
-composer -V
-```
-
-If either command is unavailable, detect the user's operating system and install the prerequisites with the appropriate command:
-
-macOS:
-
-```sh
-/bin/bash -c "$(curl -fsSL https://php.new/install/mac/8.5)"
-```
-
-Windows PowerShell:
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://php.new/install/windows/8.5'))
-```
-
-Linux:
-
-```sh
-/bin/bash -c "$(curl -fsSL https://php.new/install/linux/8.5)"
-```
-
-After installation, ask the user to restart their terminal. If the agent needs the restarted shell to continue, ask the user to reopen their terminal and rerun their original prompt.
-
-## Agent Setup
-
-Install Laravel Boost from the application root before making application changes:
-
-```sh
-composer require laravel/boost --dev
-php artisan boost:install
-```
-
-Boost replaces these bootstrap instructions with guidelines tailored to the application. After installation, read `AGENTS.md` again and continue with the user's original request using the generated guidelines.
-</laravel-boost-guidelines>
+- **PHP only runs in containers** on this dev machine:
+  `docker run --rm -v "$PWD/api:/app" -w /app composer:2 php artisan <cmd>`
+  (from the repo root; use `-v "$PWD:/app"` if already inside `api/`)
+- **Tests must pass before pushing** (a push to `main` deploys):
+  `docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:2 php artisan test --compact`
+- **Sync rules**: poke-to-pull realtime via `HouseholdTouched::send()` (never broadcast data payloads); every new write endpoint needs auth + the 120/min throttle group, household scoping through `$request->user()->household`, a `HouseholdTouched::send()`, and a feature test in `api/tests/Feature/BabylogApiTest.php`.
+- **Never commit secrets** — dev secrets live in git-ignored `.env`.
