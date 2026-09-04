@@ -344,7 +344,7 @@ export default class App extends React.Component {
       }
       // server settings win unless a local toggle is still waiting to push
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
-        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null, ...(st.settings.theme ? { theme: st.settings.theme } : {}), ...(st.settings.unit ? { unit: st.settings.unit } : {}) }
+        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null, ...(st.settings.theme ? { theme: st.settings.theme } : {}), ...(st.settings.unit ? { unit: st.settings.unit } : {}), ...(st.settings.medName ? { medName: st.settings.medName } : {}) }
       }
       if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
       if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
@@ -556,6 +556,9 @@ export default class App extends React.Component {
     return diff === 0 ? '' : diff === 1 ? 'Yesterday' : diff + ' days ago'
   }
   unit() { return this.state.settings.unit ?? this.props.unit ?? 'oz' }
+  // household-level like unit — what the daily meds dose is called everywhere it renders.
+  // Read-side default: households that never saved the key still say Vitamin D.
+  medName() { return (this.state.settings.medName || '').trim() || 'Vitamin D' }
   // stored oz → the display unit's number; oz passes through untouched so the
   // current formatting survives. Every place an amount RENDERS goes through here.
   amt(oz) { return oz == null ? oz : this.unit() === 'ml' ? ozToMl(oz) : oz }
@@ -575,7 +578,7 @@ export default class App extends React.Component {
     if (e.type === 'nurse') p.push(e.detail ? this.fmtDetail(e.detail) || String(e.detail) : 'either side')
     if (e.type === 'sleep') p.push(this.dur(e.detail))
     if (DIAPERS.includes(e.type)) p.push(e.type === 'both' ? 'wet + dirty' : e.type)
-    if (e.type === 'meds') p.push('vitamin D')
+    if (e.type === 'meds') p.push(this.medName())
     if (day) p.push(day)
     return p.filter(Boolean).join(' · ') || 'logged'
   }
@@ -685,6 +688,10 @@ export default class App extends React.Component {
   // household-level like tracking/theme — both parents should read the same numbers
   setUnit = unit => this.setState(s => ({
     settings: { ...s.settings, unit },
+    settingsDirty: true,
+  }), () => this.flushSoon())
+  setMedName = e => this.setState(s => ({
+    settings: { ...s.settings, medName: e.target.value },
     settingsDirty: true,
   }), () => this.flushSoon())
   // theme mode & tilt are per-phone (fx.js), not household settings — the
@@ -1611,10 +1618,11 @@ export default class App extends React.Component {
       unitWord: this.unit() === 'ml' ? 'millilitres' : 'ounces',
       trackRows: TRACKS.map(tr => {
         const on = this.trackOn(tr.key), tt = T(tr.types[0])
-        return { label: tr.label, icon: tt.icon, color: tt.color,
+        return { key: tr.key, on, label: tr.label, icon: tt.icon, color: tt.color,
           toggleIcon: on ? 'toggle_on' : 'toggle_off', toggleColor: on ? 'var(--accent)' : 'var(--dim)',
           onToggle: () => this.setTracking(tr.key, !on) }
       }),
+      medNameField: s.settings.medName ?? '', setMedName: this.setMedName,
       widgetRows: (() => {
         const shown = this.widgetKeys()
         return WIDGETS.filter(w => !w.track || this.trackOn(w.track)).map(w => {
@@ -2250,14 +2258,22 @@ export default class App extends React.Component {
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>What you track</div>
-                {v.trackRows.map((r, i) => (
-                  <div key={i} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
-                    <Sym style={{ fontSize: 18, color: r.color }}>{r.icon}</Sym>
-                    <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{r.label}</div>
-                    <button type="button" onClick={r.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
-                      <Sym style={{ fontSize: 22, color: r.toggleColor }}>{r.toggleIcon}</Sym>
-                    </button>
-                  </div>
+                {v.trackRows.map(r => (
+                  <React.Fragment key={r.key}>
+                    <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: r.color }}>{r.icon}</Sym>
+                      <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{r.label}</div>
+                      <button type="button" onClick={r.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                        <Sym style={{ fontSize: 22, color: r.toggleColor }}>{r.toggleIcon}</Sym>
+                      </button>
+                    </div>
+                    {r.key === 'meds' && r.on && (
+                      <div style={S('display:flex;align-items:center;gap:8px;padding:2px 0 8px 29px')}>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0")}>Name</div>
+                        <input type="text" value={v.medNameField} onChange={v.setMedName} placeholder="Vitamin D" maxLength={40} style={S("flex:1;min-width:0;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:7px 9px;font-size:13px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Feeds are always on. Turning something off hides it for both of you — old entries stay, and it all comes back if you switch it on again.</div>
               </div>

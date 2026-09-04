@@ -210,6 +210,27 @@ class BabylogApiTest extends TestCase
         $this->assertSame('ml', $this->getJson('/api/state', $this->authed($ben))->json('settings.unit'));
     }
 
+    public function test_med_name_round_trips_to_the_partner(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $this->postJson('/api/settings', ['medName' => '  Vitamin D drops  '], $this->authed($ben))->assertOk();
+        $this->assertSame('Vitamin D drops', $this->getJson('/api/state', $this->authed($kat))->json('settings.medName'));
+
+        // a client that predates medName syncs settings without the key — the name survives
+        $this->postJson('/api/settings', ['tracking' => ['bath' => false]], $this->authed($kat))->assertOk();
+        $this->assertSame('Vitamin D drops', $this->getJson('/api/state', $this->authed($ben))->json('settings.medName'));
+
+        // clearing the field is allowed — clients fall back to Vitamin D on read
+        $this->postJson('/api/settings', ['medName' => ''], $this->authed($ben))->assertOk();
+        $this->assertSame('', $this->getJson('/api/state', $this->authed($ben))->json('settings.medName'));
+
+        // a novel of a med name is rejected
+        $this->postJson('/api/settings', ['medName' => str_repeat('a', 41)], $this->authed($ben))->assertStatus(422);
+    }
+
     public function test_settings_are_scoped_to_the_household(): void
     {
         config(['babylog.open_registration' => true]);

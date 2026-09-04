@@ -143,6 +143,8 @@ class SyncController extends Controller
             'theme.bg' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_BGS)],
             // display unit only — entry amounts are stored and synced in oz regardless
             'unit' => ['sometimes', 'string', 'in:oz,ml'],
+            // what the daily meds dose is called; clients default a blank/absent name to "Vitamin D" on read
+            'medName' => ['sometimes', 'nullable', 'string', 'max:40'],
         ]);
 
         $household = $request->user()->household;
@@ -165,6 +167,9 @@ class SyncController extends Controller
         }
         if (array_key_exists('unit', $data)) {
             $settings['unit'] = $data['unit'];
+        }
+        if (array_key_exists('medName', $data)) {
+            $settings['medName'] = trim((string) ($data['medName'] ?? ''));
         }
         $household->update(['settings' => $settings]);
 
