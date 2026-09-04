@@ -124,6 +124,37 @@ class PushNotificationsTest extends TestCase
         $this->postJson('/api/notify-prefs', ['tz' => 'Mars/Olympus'], $this->authed($ben))->assertStatus(422);
     }
 
+    public function test_per_child_feed_interval_round_trips_and_survives_partial_posts(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com');
+        $this->postJson('/api/baby', ['name' => 'Wren'], $this->authed($ben))->assertOk();
+        $rileyId = $this->postJson('/api/children', ['name' => 'Riley'], $this->authed($ben))->json('child.id');
+
+        $this->postJson('/api/notify-prefs', ['feed' => true, 'feedEveryByChild' => [(string) $rileyId => 120]], $this->authed($ben))->assertOk();
+        $prefs = $this->getJson('/api/state', $this->authed($ben))->json('user.notifyPrefs');
+        $this->assertSame([$rileyId => 120], $prefs['feedEveryByChild']);
+
+        // a later partial POST that doesn't mention the map leaves it intact
+        $this->postJson('/api/notify-prefs', ['feedEvery' => 180], $this->authed($ben))->assertOk();
+        $prefs = $this->getJson('/api/state', $this->authed($ben))->json('user.notifyPrefs');
+        $this->assertSame([$rileyId => 120], $prefs['feedEveryByChild']);
+        $this->assertSame(180, $prefs['feedEvery']);
+
+        // bad values and bad shapes are 422s
+        $this->postJson('/api/notify-prefs', ['feedEveryByChild' => [(string) $rileyId => 999]], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/notify-prefs', ['feedEveryByChild' => 'nope'], $this->authed($ben))->assertStatus(422);
+
+        // a key for a child outside the household is silently dropped, not stored
+        $this->postJson('/api/notify-prefs', ['feedEveryByChild' => ['9999' => 150, (string) $rileyId => 240]], $this->authed($ben))->assertOk();
+        $prefs = $this->getJson('/api/state', $this->authed($ben))->json('user.notifyPrefs');
+        $this->assertSame([$rileyId => 240], $prefs['feedEveryByChild']);
+
+        // sending the map without a child's key clears that override
+        $this->postJson('/api/notify-prefs', ['feedEveryByChild' => []], $this->authed($ben))->assertOk();
+        $prefs = $this->getJson('/api/state', $this->authed($ben))->json('user.notifyPrefs');
+        $this->assertSame([], $prefs['feedEveryByChild']);
+    }
+
     // ── handoff pushes ────────────────────────────────────────────────────────
 
     public function test_shift_events_push_the_partner(): void
@@ -263,6 +294,37 @@ class PushNotificationsTest extends TestCase
         $this->postJson('/api/entries', ['entries' => [
             ['id' => 'f2', 'type' => 'nurse', 't' => now()->getTimestampMs() - 10 * 60000],
         ]], $this->authed($ben))->assertOk();
+        $this->artisan('babylog:reminders')->assertSuccessful();
+        $this->assertCount(1, $this->push->to($benId));
+    }
+
+    public function test_per_child_feed_override_fires_only_for_the_overridden_child(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com');
+        $benId = $this->getJson('/api/state', $this->authed($ben))->json('user.id');
+        $this->subscribe($ben);
+        $this->postJson('/api/baby', ['name' => 'Wren'], $this->authed($ben))->assertOk();
+        $rileyId = $this->postJson('/api/children', ['name' => 'Riley'], $this->authed($ben))->json('child.id');
+
+        // Riley is overridden to every 2h; Wren inherits the global 4h
+        $this->postJson('/api/notify-prefs', [
+            'feed' => true, 'feedEvery' => 240,
+            'feedEveryByChild' => [(string) $rileyId => 120],
+        ], $this->authed($ben))->assertOk();
+
+        // both children last fed 3 hours ago — hand-written: 3h = 10800000 ms.
+        // Riley (2h window) is an hour overdue; Wren (4h window) has an hour to go.
+        $threeHoursAgo = now()->getTimestampMs() - 10800000;
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'fw1', 'type' => 'bottle', 't' => $threeHoursAgo, 'detail' => '4'], // no baby_id → Wren (primary)
+            ['id' => 'fr1', 'type' => 'bottle', 't' => $threeHoursAgo, 'detail' => '4', 'baby_id' => $rileyId],
+        ]], $this->authed($ben))->assertOk();
+
+        $this->artisan('babylog:reminders')->assertSuccessful();
+        $this->assertCount(1, $this->push->to($benId));
+        $this->assertStringContainsString('Riley', $this->push->to($benId)[0]['title']);
+
+        // second tick: still just the one nudge, and still nothing for Wren
         $this->artisan('babylog:reminders')->assertSuccessful();
         $this->assertCount(1, $this->push->to($benId));
     }

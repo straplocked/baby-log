@@ -126,7 +126,10 @@ class SendReminders extends Command
             }
             $starts = $this->sessionStarts($ts);
             $lastStart = end($starts);
-            $gap = $p['feedEvery'] ? $p['feedEvery'] * 60000 : $this->rhythmGap($starts);
+            // per-child override wins; a child without one inherits the global
+            // interval (or the learned rhythm) exactly as before
+            $every = ((array) ($p['feedEveryByChild'] ?? []))[$child->id] ?? $p['feedEvery'];
+            $gap = $every ? $every * 60000 : $this->rhythmGap($starts);
             if ($now < $lastStart + $gap) {
                 continue;
             }

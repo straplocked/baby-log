@@ -30,6 +30,7 @@ class User extends Authenticatable
         'partner' => false,     // "your partner logged something"
         'feed' => false,        // feed-gap reminder
         'feedEvery' => null,    // minutes between feeds; null = learned household rhythm
+        'feedEveryByChild' => [], // per-child override: childId => minutes; unset children inherit feedEvery
         'onDutyOnly' => true,   // feed reminders only while I'm on duty
         'wake' => false,        // awake past the age-typical wake window
         'meds' => false,        // daily meds reminder

@@ -601,7 +601,7 @@ export default class App extends React.Component {
   // ── notifications (per-user prefs; the push subscription is per-device) ────
   nPrefs() {
     return {
-      handoff: true, partner: false, feed: false, feedEvery: null, onDutyOnly: true,
+      handoff: true, partner: false, feed: false, feedEvery: null, feedEveryByChild: {}, onDutyOnly: true,
       wake: false, meds: false, medsTime: '09:00',
       quiet: false, quietStart: '22:00', quietEnd: '07:00', tz: null,
       ...(this.state.notifyPrefs || {}),
@@ -2002,6 +2002,26 @@ export default class App extends React.Component {
           feedOn: np.feed,
           feedChips: [[null, 'Rhythm'], [120, '2h'], [150, '2½h'], [180, '3h'], [210, '3½h'], [240, '4h']
           ].map(([v2, label]) => ({ label, onTap: () => this.setNotify({ feedEvery: v2 }), ...this.chip(np.feedEvery === v2, OLIVE) })),
+          // 2+ children: one labeled chip row per child writing feedEveryByChild;
+          // "Rhythm" clears that child's override so it inherits the global
+          // feedEvery (untouched by these rows) or the learned rhythm
+          feedChildRows: kids.length > 1 ? kids.map(c => {
+            const byChild = np.feedEveryByChild || {}
+            const cur = byChild[c.id] ?? null
+            return {
+              id: c.id, name: c.name,
+              chips: [[null, 'Rhythm'], [120, '2h'], [150, '2½h'], [180, '3h'], [210, '3½h'], [240, '4h']
+              ].map(([v2, label]) => ({
+                label,
+                onTap: () => {
+                  const next = { ...byChild }
+                  if (v2 == null) delete next[c.id]; else next[c.id] = v2
+                  this.setNotify({ feedEveryByChild: next })
+                },
+                ...this.chip(cur === v2, OLIVE),
+              })),
+            }
+          }) : null,
           onDutyOnly: np.onDutyOnly,
           onDutyToggleIcon: np.onDutyOnly ? 'toggle_on' : 'toggle_off',
           onDutyToggleColor: np.onDutyOnly ? 'var(--accent)' : 'var(--dim)',
@@ -2987,12 +3007,21 @@ export default class App extends React.Component {
                     </div>
                     {r.key === 'feed' && v.notify.feedOn && (
                       <>
+                        {v.notify.feedChildRows ? v.notify.feedChildRows.map(cr => (
+                          <div key={cr.id} style={S('display:flex;align-items:center;gap:7px;padding:2px 0 8px 29px;overflow:auto')}>
+                            <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0")}>{cr.name}</div>
+                            {cr.chips.map((c, i) => (
+                              <button key={i} type="button" onClick={c.onTap} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:6px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                            ))}
+                          </div>
+                        )) : (
                         <div style={S('display:flex;align-items:center;gap:7px;padding:2px 0 8px 29px;overflow:auto')}>
                           <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0")}>Every</div>
                           {v.notify.feedChips.map((c, i) => (
                             <button key={i} type="button" onClick={c.onTap} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:6px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:${c.fg};cursor:pointer`)}>{c.label}</button>
                           ))}
                         </div>
+                        )}
                         <div style={S('display:flex;align-items:center;gap:11px;padding:0 0 8px 29px')}>
                           <div style={S('flex:1;font-size:13px;color:#6E6659')}>Only while I’m on duty</div>
                           <button type="button" onClick={v.notify.toggleOnDuty} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
