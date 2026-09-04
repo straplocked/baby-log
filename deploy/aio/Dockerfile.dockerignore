@@ -1,0 +1,23 @@
+# Ignore rules for the all-in-one build (context = repo root). BuildKit
+# prefers this file over the root .dockerignore when building with
+# -f deploy/aio/Dockerfile — so it must cover BOTH the frontend excludes
+# (root .dockerignore) and the api excludes (api/.dockerignore).
+.git
+node_modules
+dist
+design
+docs
+deploy
+!deploy/aio
+.github
+*.md
+api/vendor
+api/node_modules
+api/.env
+api/.env.*
+api/database/*.sqlite
+api/storage/logs/*
+api/storage/framework/cache/data/*
+api/storage/framework/sessions/*
+api/storage/framework/views/*
+api/tests
