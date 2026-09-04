@@ -1,6 +1,6 @@
 # Baby Log 🐤
 
-**Your baby's data on your own server.** Baby Log is a self-hosted baby tracker built for exactly two parents sharing one baby's log — true realtime sync between both phones, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
+**Your baby's data on your own server.** Baby Log is a self-hosted baby tracker built for one household sharing its babies' log — two parents, or parents plus the caregivers they trust — with true realtime sync between every phone, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
 
 <!-- screenshots:start -->
 <p align="center">
@@ -13,14 +13,14 @@
 ## What it does
 
 - **Three taps from pocket to logged.** The entry sheet opens pre-stamped with the current time and a prediction of what you're about to log (alternating nursing sides, last bottle amount, feed-vs-diaper rhythm). Overriding the guess costs one tap; backfilling costs one nudge (−5/−15/−1h).
-- **Both of you, one log — live.** The second parent joins by invite and sees the same log in realtime over websockets. Entries write locally first and sync when there's signal, so 3am logging never waits on the network; queued entries are marked until they flush.
+- **The whole household, one log — live.** Everyone joins by invite and sees the same log in realtime over websockets; with multiple children, pills on Now and History switch between each child's log. Entries write locally first and sync when there's signal, so 3am logging never waits on the network; queued entries are marked until they flush.
 - **Shifts, not just a log.** "I need to sleep, take him" is a first-class flow: request a handoff with a note, the partner accepts with an auto-drafted plan from the baby's rhythm and an "until" time, logged feeds tick the plan off, the off-duty parent watches progress on a read-only shift card, a push pings both of you when the "until" passes, and handing back generates a shift summary instead of a "when did you…" conversation.
 - **Live timers, shared across phones.** Nursing, pumping, and sleep run as server-backed start/stop timers visible on both devices; stopping auto-logs the entry (pumping captures the amount at stop, sleep stamps the nap at wake-up).
 - **Now & History.** Since-cards (fed/diaper/slept/bath), today's totals, an editable timeline with one-shot undo (add, edit, or delete), 7-day stats and charts with tap-through day-by-day drill-down, a feeds-rhythm insight, and a live age header from the baby's birth date.
 - **Notifications without a cloud.** Self-hosted Web Push (VAPID keys generate themselves — no FCM/APNs account): handoff requests and handbacks, opt-in partner activity, feed-gap and wake-window reminders, a daily meds nudge, and quiet hours — all per-parent.
 - **Your data, portable.** Export the full log or per-day summaries as CSV through the native share sheet ("Share with your pediatrician"); switching from Baby Buddy? Settings imports its CSV exports, idempotently.
 - **Made yours.** Household oz/ml units, a nameable daily med, toggleable entry types (pump, diapers, sleep, bath, meds), account settings (name, email, password, baby's name), and per-device dark mode that can ignore the OS schedule for that 3am feed.
-- **Invite-only by design.** The first account claims the instance and invites the second parent (emailed code with SMTP, shareable on-screen code without). Password reset works the same way. Max two adults per household — that's the point.
+- **Invite-only by design.** The first account claims the instance and invites the rest of the household (emailed code with SMTP, shareable on-screen code without) — each invite as a **parent** (full control) or a **caregiver** (logs, timers, and shifts, but can't touch settings or membership). Password reset works the same way. Up to six adults and ten children per household — enough for a doula and twins, still an appliance, not a platform.
 
 ## Honest comparison: Baby Buddy
 
@@ -31,13 +31,13 @@
 | Offline logging | Local-first PWA — entries queue and sync later | Needs a connection |
 | Realtime partner sync | Live over websockets, both phones converge instantly | Refresh to see the other phone's entries |
 | Shift handoffs | First-class: request → plan → handback summary | — |
-| Household model | Exactly 2 parents, 1 baby | Many caregivers, multiple children |
+| Household model | Up to 6 adults (parent/caregiver roles), up to 10 children | Many caregivers, multiple children |
 | Tracking breadth | 9 focused entry types | Broader: tummy time, growth + WHO percentiles, notes, more |
 | Integrations | CSV export; imports Baby Buddy CSV | REST API, Home Assistant, companion mobile apps |
 | Languages | English only (so far) | 9 years of i18n, many languages |
 | License | AGPL-3.0 | BSD-2-Clause |
 
-If you want multi-child support, growth charts, Home Assistant, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. Baby Log optimizes for a narrower job: two exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
+If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. Baby Log optimizes for a narrower job: exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
 
 ## Install
 
