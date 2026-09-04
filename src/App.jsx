@@ -192,6 +192,9 @@ export default class App extends React.Component {
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       exportRange: 'all', // ephemeral — resets to Everything each load on purpose
+      // account editing (settings) — ephemeral, seeded from me/baby when the screen opens
+      acctName: '', acctBabyName: '', acctOpen: null, // null | 'email' | 'password'
+      acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '', acctBusy: false, acctError: null,
       notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
       shiftOpen: false, shiftIn: false, shiftLeaving: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
       fx: getFx(), // device-local (babylog:fx), not in PERSIST
@@ -461,6 +464,8 @@ export default class App extends React.Component {
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
       activeTimer: null, timerSide: null, manualDur: false,
+      acctName: '', acctBabyName: '', acctOpen: null, acctError: null, acctBusy: false,
+      acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
     })
   }
 
@@ -575,6 +580,62 @@ export default class App extends React.Component {
     this.setState({ babyBirthdate: bd })
     api.setBaby({ name: this.state.babyName || 'Baby', birthdate: bd }).catch(() => this.setState({ offline: true }))
   }
+  // ── account (settings) ─────────────────────────────────────────────────────
+  saveMyName = () => {
+    const name = (this.state.acctName || '').trim()
+    if (!name || !this.state.me || name === this.state.me.name) return
+    // local-first like everything else: the header updates now, the partner on the next poke
+    this.setState(s => ({ me: s.me ? { ...s.me, name } : s.me }))
+    api.accountProfile(name).catch(() => this.setState({ offline: true }))
+  }
+  saveBabyName = () => {
+    const name = (this.state.acctBabyName || '').trim()
+    if (!name || name === this.state.babyName) return
+    this.setState({ babyName: name })
+    // setBaby only touches the fields it's sent — birthdate survives a rename
+    api.setBaby({ name }).catch(() => this.setState({ offline: true }))
+  }
+  toggleAcct = which => this.setState(s => ({
+    acctOpen: s.acctOpen === which ? null : which,
+    acctError: null, acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
+  }))
+  acctFail = e => {
+    const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+    this.setState({
+      acctBusy: false,
+      acctError: e.status ? (first || e.message || 'That didn’t go through — try again.') : 'No signal — try again in a moment.',
+    })
+  }
+  submitAcctEmail = async () => {
+    const s = this.state
+    const email = s.acctEmail.trim()
+    if (!email || !s.acctEmailPw || s.acctBusy) return
+    this.setState({ acctBusy: true, acctError: null })
+    try {
+      const r = await api.accountEmail({ email, password: s.acctEmailPw })
+      this.setState(st => ({
+        acctBusy: false, acctOpen: null, acctEmail: '', acctEmailPw: '',
+        me: st.me ? { ...st.me, email: r.email } : st.me,
+        toast: 'Email updated — log in with ' + r.email + ' next time', lastAdded: null,
+      }))
+      this.bumpToast()
+    } catch (e) { this.acctFail(e) }
+  }
+  submitAcctPassword = async () => {
+    const s = this.state
+    if (!s.acctPwCur || !s.acctPwNew || s.acctBusy) return
+    if (s.acctPwNew.length < 8) return this.setState({ acctError: 'Pick a password with at least 8 characters.' })
+    this.setState({ acctBusy: true, acctError: null })
+    try {
+      await api.accountPassword({ current_password: s.acctPwCur, password: s.acctPwNew })
+      this.setState({
+        acctBusy: false, acctOpen: null, acctPwCur: '', acctPwNew: '',
+        toast: 'Password updated — other phones will need to log in again', lastAdded: null,
+      })
+      this.bumpToast()
+    } catch (e) { this.acctFail(e) }
+  }
+
   trackOn(key) { return this.state.settings.tracking[key] !== false }
   typeOn(typeKey) {
     const tr = TRACKS.find(t => t.types.includes(typeKey))
@@ -1326,7 +1387,12 @@ export default class App extends React.Component {
       isSettings: s.screen === 'settings',
       goSettings: () => {
         try { window.history.pushState({ blSettings: true }, '') } catch { /* back just exits */ }
-        this.setState({ screen: 'settings' })
+        this.setState({
+          screen: 'settings',
+          // seed the editable account fields fresh each visit; abandoned edits don't linger
+          acctName: me?.name || '', acctBabyName: s.babyName || '',
+          acctOpen: null, acctError: null, acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
+        })
       },
       settingsBack: () => {
         // consume our entry so the button and the back gesture stay in step
@@ -1550,6 +1616,21 @@ export default class App extends React.Component {
         const on = s.exportRange === val
         return { label, onTap: () => this.setState({ exportRange: val }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
+      account: {
+        babyName: s.acctBabyName, setBabyName: e => this.setState({ acctBabyName: e.target.value }),
+        saveBabyName: this.saveBabyName,
+        name: s.acctName, setName: e => this.setState({ acctName: e.target.value }),
+        saveName: this.saveMyName,
+        email: me?.email || '',
+        open: s.acctOpen, toggle: this.toggleAcct,
+        emailField: s.acctEmail, setEmailField: e => this.setState({ acctEmail: e.target.value, acctError: null }),
+        emailPw: s.acctEmailPw, setEmailPw: e => this.setState({ acctEmailPw: e.target.value, acctError: null }),
+        submitEmail: this.submitAcctEmail,
+        pwCur: s.acctPwCur, setPwCur: e => this.setState({ acctPwCur: e.target.value, acctError: null }),
+        pwNew: s.acctPwNew, setPwNew: e => this.setState({ acctPwNew: e.target.value, acctError: null }),
+        submitPassword: this.submitAcctPassword,
+        busy: s.acctBusy, error: s.acctError,
+      },
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode, inviteMailed: s.inviteMailed,
     }
@@ -2065,6 +2146,11 @@ export default class App extends React.Component {
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.babyName}</div>
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Name</div>
+                  <input value={v.account.babyName} onChange={v.account.setBabyName} onBlur={v.account.saveBabyName} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} placeholder="Baby" style={S("width:140px;box-sizing:border-box;text-align:right;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                </div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
                   <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
                   <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
@@ -2224,6 +2310,51 @@ export default class App extends React.Component {
                   <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>ios_share</Sym>
                 </button>
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Opens your phone’s share sheet as a CSV — send it by email or message.</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Your account</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>badge</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Your name</div>
+                  <input value={v.account.name} onChange={v.account.setName} onBlur={v.account.saveName} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} placeholder="Parent" style={S("width:140px;box-sizing:border-box;text-align:right;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                </div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 250)' }}>alternate_email</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Email</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{v.account.email || '—'}</div>
+                  </div>
+                  <button type="button" onClick={() => v.account.toggle('email')} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>{v.account.open === 'email' ? 'Cancel' : 'Change'}</button>
+                </div>
+                {v.account.open === 'email' && (
+                  <div style={S('display:flex;flex-direction:column;gap:8px;padding:2px 0 10px 29px')}>
+                    <input placeholder="New email" type="email" value={v.account.emailField} onChange={v.account.setEmailField} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                    <input placeholder="Current password" type="password" value={v.account.emailPw} onChange={v.account.setEmailPw} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                    {v.account.error && (
+                      <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;text-wrap:pretty')}>{v.account.error}</div>
+                    )}
+                    <button type="button" onClick={v.account.submitEmail} className="hov-olive" style={S('align-self:flex-start;height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6')}>{v.account.busy ? 'One sec…' : 'Save email'}</button>
+                    <div style={S('font-size:11.5px;color:#B5AC98;text-wrap:pretty')}>You’ll log in with the new address from now on — this phone stays signed in.</div>
+                  </div>
+                )}
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 300)' }}>key</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Password</div>
+                  <button type="button" onClick={() => v.account.toggle('password')} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>{v.account.open === 'password' ? 'Cancel' : 'Change'}</button>
+                </div>
+                {v.account.open === 'password' && (
+                  <div style={S('display:flex;flex-direction:column;gap:8px;padding:2px 0 10px 29px')}>
+                    <input placeholder="Current password" type="password" value={v.account.pwCur} onChange={v.account.setPwCur} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                    <input placeholder="New password — 8+ characters" type="password" value={v.account.pwNew} onChange={v.account.setPwNew} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                    {v.account.error && (
+                      <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;text-wrap:pretty')}>{v.account.error}</div>
+                    )}
+                    <button type="button" onClick={v.account.submitPassword} className="hov-olive" style={S('align-self:flex-start;height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6')}>{v.account.busy ? 'One sec…' : 'Save password'}</button>
+                    <div style={S('font-size:11.5px;color:#B5AC98;text-wrap:pretty')}>Every other phone gets logged out — this one stays signed in.</div>
+                  </div>
+                )}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Your name is what your partner sees on duty and handoffs.</div>
               </div>
 
               {v.invitePending && (
