@@ -4,7 +4,7 @@
 # boring package; we don't need s6's service graph for four flat processes).
 #
 # Build from the repo root:
-#   docker build -f deploy/aio/Dockerfile -t baby-log-aio .
+#   docker build -f deploy/aio/Dockerfile -t mybabynotes-aio .
 #
 # All state (SQLite + the generated .env) lives under the /data volume.
 

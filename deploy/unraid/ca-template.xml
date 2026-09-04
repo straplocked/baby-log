@@ -11,14 +11,14 @@
 -->
 <Container version="2">
   <Name>mybabynotes</Name>
-  <Repository>ghcr.io/straplocked/baby-log-aio:latest</Repository>
-  <Registry>https://github.com/straplocked/baby-log/pkgs/container/baby-log-aio</Registry>
+  <Repository>ghcr.io/straplocked/mybabynotes-aio:latest</Repository>
+  <Registry>https://github.com/straplocked/mybabynotes/pkgs/container/mybabynotes-aio</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/straplocked/baby-log/issues</Support>
-  <Project>https://github.com/straplocked/baby-log</Project>
-  <ReadMe>https://github.com/straplocked/baby-log#readme</ReadMe>
+  <Support>https://github.com/straplocked/mybabynotes/issues</Support>
+  <Project>https://github.com/straplocked/mybabynotes</Project>
+  <ReadMe>https://github.com/straplocked/mybabynotes#readme</ReadMe>
   <Overview>Baby tracker built for exactly two parents sharing one baby's log — your data stays in one SQLite file on your server.
 
 Three taps from pocket to logged: the entry sheet opens pre-stamped with the current time and a prediction of what you're about to log (alternating nursing sides, last bottle amount, feed-vs-diaper rhythm). Entries write locally first and sync when there's signal, so 3am logging never waits on the network.
@@ -32,8 +32,8 @@ First boot generates all secrets into /data/.env automatically; the first accoun
 For access beyond your LAN (and for installing the PWA + push notifications, which need HTTPS), put a reverse proxy with websocket support in front — Nginx Proxy Manager or SWAG both work; enable websockets for the /app path.</Overview>
   <Category>Tools:Utilities Productivity:</Category>
   <WebUI>http://[IP]:[PORT:3500]</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/ca-template.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/straplocked/baby-log/main/public/icons/icon-512.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/ca-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/straplocked/mybabynotes/main/public/icons/icon-512.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <DonateText/>
