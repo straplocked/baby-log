@@ -45,7 +45,7 @@ export const api = {
   pushUnsubscribe: endpoint => call('/push/unsubscribe', { method: 'POST', body: { endpoint } }),
   saveNotifyPrefs: prefs => call('/notify-prefs', { method: 'POST', body: prefs }),
   pushEntries: entries => call('/entries', { method: 'POST', body: { entries } }),
-  timerStart: type => call('/timer/start', { method: 'POST', body: { type } }),
+  timerStart: (type, babyId) => call('/timer/start', { method: 'POST', body: { type, ...(babyId != null ? { baby_id: babyId } : {}) } }), // baby_id absent → primary child
   timerStop: () => call('/timer/stop', { method: 'POST' }),
   shiftRequest: note => call('/shifts/request', { method: 'POST', body: { note } }),
   shiftAccept: (plan, until, untilAt) => call('/shifts/accept', { method: 'POST', body: { plan, until, until_at: untilAt } }), // until_at: ms epoch or null

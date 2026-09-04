@@ -158,7 +158,10 @@ const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'inviteMailed', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
-  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide']
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide',
+  // multi-child household: the lists sync via /state; selectedChildId is a
+  // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
+  'children', 'members', 'selectedChildId']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -206,6 +209,7 @@ export default class App extends React.Component {
       toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
+      children: [], members: [], selectedChildId: null, sheetChildId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
@@ -311,7 +315,9 @@ export default class App extends React.Component {
         const ids = new Set(this.state.outbox)
         const pushed = new Map(this.state.entries.filter(e => ids.has(e.id)).map(e => [e.id, e]))
         const payload = [...pushed.values()]
-          .map(e => ({ id: e.id, type: e.type, t: e.t, detail: e.detail == null ? null : String(e.detail), deleted: !!e.deleted }))
+          // baby_id rides along only when known — absent means "primary child"
+          // on create and "keep what you have" on update, server-side
+          .map(e => ({ id: e.id, type: e.type, t: e.t, detail: e.detail == null ? null : String(e.detail), deleted: !!e.deleted, ...(e.babyId != null ? { baby_id: e.babyId } : {}) }))
         // the server caps 500 entries per batch — a Baby Buddy import (or any
         // bulk enqueue) flushes in slices; a failed slice throws, leaves the
         // outbox intact, and the idempotent upsert re-pushes it next sync
@@ -350,14 +356,23 @@ export default class App extends React.Component {
       const map = new Map(s.entries.map(e => [e.id, e]))
       for (const e of (st.entries || [])) {
         if (outbox.has(e.id)) continue // our unpushed write wins for now
-        map.set(e.id, { id: e.id, type: e.type, t: e.t, detail: numify(e.detail), deleted: !!e.deleted, by: e.user_id })
+        // null babyId reads as the primary child everywhere a view filters
+        map.set(e.id, { id: e.id, type: e.type, t: e.t, detail: numify(e.detail), deleted: !!e.deleted, by: e.user_id, babyId: e.baby_id ?? null })
       }
+      // partner stays derived — the first other member — so the existing
+      // two-person shift code keeps working in a many-member household
+      const others = (st.members || []).filter(m => st.user && m.id !== st.user.id)
       const next = {
         entries: [...map.values()].sort((a, b) => b.t - a.t),
-        me: st.user, partner: st.partner, invitePending: st.invitePending,
+        me: st.user, invitePending: st.invitePending,
+        partner: others.length ? { id: others[0].id, name: others[0].name } : (st.members ? null : st.partner ?? null),
+        members: st.members || [],
+        children: st.children || [],
         onDutyUserId: st.onDutyUserId, serverShift: st.shift,
         lastSync: st.serverTime,
       }
+      // a selected child that was removed server-side falls back to primary
+      if (s.selectedChildId != null && !next.children.some(c => c.id === s.selectedChildId)) next.selectedChildId = null
       // server settings win unless a local toggle is still waiting to push
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
         next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null, ...(st.settings.theme ? { theme: st.settings.theme } : {}), ...(st.settings.unit ? { unit: st.settings.unit } : {}), ...(st.settings.medName ? { medName: st.settings.medName } : {}) }
@@ -484,6 +499,7 @@ export default class App extends React.Component {
       screen: 'splash', authMode: 'signup', authName: '', authEmail: '', authPassword: '', authError: null,
       forgotOpen: false, forgotEmail: '', forgotResult: null,
       entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null, inviteCode: null, inviteMailed: false,
+      children: [], members: [], selectedChildId: null, sheetChildId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false,
       shiftOpen: false, shiftIn: false, shiftLeaving: false, toast: null, toastLeaving: false,
@@ -549,8 +565,28 @@ export default class App extends React.Component {
     this.bumpToast()
   }
 
+  // ── children (multi-child households) ──────────────────────────────────────
+  // primary = the household's oldest child (id order, same rule as the server's
+  // compat `baby` key); entries with a null babyId belong to it
+  primaryChildId() { return this.state.children[0]?.id ?? null }
+  // the child the device is looking at: the picked one when it still exists,
+  // else primary; null only before the first sync ever delivers children
+  selChild() {
+    const kids = this.state.children
+    if (!kids || !kids.length) return null
+    return (this.state.selectedChildId != null && kids.find(c => c.id === this.state.selectedChildId)) || kids[0]
+  }
+  selChildId() { const c = this.selChild(); return c ? c.id : null }
+
   // ── entry helpers (views always work on live = non-deleted entries) ────────
-  live() { return this.state.entries.filter(e => !e.deleted) }
+  // every view and aggregate reads the selected child's log: a null babyId
+  // counts as the primary child, and with no children known nothing filters
+  live() {
+    const selId = this.selChildId()
+    if (selId == null) return this.state.entries.filter(e => !e.deleted)
+    const primId = this.primaryChildId()
+    return this.state.entries.filter(e => !e.deleted && (e.babyId ?? primId) === selId)
+  }
 
   clock(t) {
     const d = new Date(t)
@@ -599,15 +635,20 @@ export default class App extends React.Component {
     return p.filter(Boolean).join(' · ') || 'logged'
   }
   // real DOB wins over the onboarding age bucket; weeks first, then months, then years
-  ageInfo() {
-    const bd = this.state.babyBirthdate
-    if (!bd) return { label: this.state.age, weeks: null }
+  ageInfoFor(bd, fallbackLabel) {
+    if (!bd) return { label: fallbackLabel, weeks: null }
     const days = Math.max(0, Math.floor((Date.now() - new Date(bd + 'T00:00:00').getTime()) / DAY))
     const weeks = Math.floor(days / 7), mo = Math.floor(days / 30.4375)
     const label = days < 183 ? weeks + (weeks === 1 ? ' wk' : ' wks')
       : mo < 24 ? mo + ' mo'
       : Math.floor(mo / 12) + 'y' + (mo % 12 ? ' ' + (mo % 12) + 'm' : '')
     return { label, weeks }
+  }
+  // the SELECTED child's age — headers and age-norm insights follow the pills;
+  // the pre-children mirrors keep old cached state working until the first sync
+  ageInfo() {
+    const c = this.selChild()
+    return this.ageInfoFor(c ? c.birthdate : this.state.babyBirthdate, (c && c.age) || this.state.age)
   }
   setBirthdate = e => {
     const bd = e.target.value
@@ -760,14 +801,16 @@ export default class App extends React.Component {
   startTimer = type => {
     // pre-picked nurse side (if any) is remembered locally for the stop log
     const side = type === 'nurse' ? (this.state.detail || this.defaultDetail('nurse')) : null
+    // the sheet's child chip (when >1 child) decides who this session is for
+    const babyId = this.state.sheetChildId ?? this.selChildId()
     this._timerBusy = true
     this.closeSheet() // animated close that also consumes the {blSheet} history entry
     this.setState({
       manualDur: false,
-      activeTimer: { id: 'local', type, started_at: Date.now(), user_id: this.state.me?.id },
+      activeTimer: { id: 'local', type, started_at: Date.now(), user_id: this.state.me?.id, baby_id: babyId },
       timerSide: side,
     })
-    api.timerStart(type)
+    api.timerStart(type, babyId)
       .then(r => this.setState({ activeTimer: r.timer }))
       .catch(() => this.setState({ offline: true }))
       .finally(() => { this._timerBusy = false })
@@ -779,11 +822,14 @@ export default class App extends React.Component {
     this._timerBusy = true
     this.setState({ activeTimer: null })
     api.timerStop().catch(() => this.setState({ offline: true })).finally(() => { this._timerBusy = false })
+    // the entry belongs to the child the timer was started for — pill switches
+    // mid-session must not redirect the log (null-era timers → primary child)
+    const timerBabyId = t.baby_id ?? this.primaryChildId()
     if (t.type === 'nurse') {
       // nursing: measured side + duration log straight away, undo available
       const side = this.state.timerSide || this.defaultDetail('nurse')
       const detail = [side, mins + 'm'].filter(Boolean).join(' · ')
-      const entry = { id: uuid(), type: 'nurse', t: t.started_at, detail, by: this.state.me?.id }
+      const entry = { id: uuid(), type: 'nurse', t: t.started_at, detail, by: this.state.me?.id, babyId: timerBabyId }
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
         toast: 'Nursing logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id }, timerSide: null,
@@ -793,7 +839,7 @@ export default class App extends React.Component {
       // sleep: the entry stamps the wake-up moment, and the duration leads the
       // detail as bare minutes (the sleep format — the wake-window insight
       // subtracts it from t to find when the nap started)
-      const entry = { id: uuid(), type: 'sleep', t: Date.now(), detail: mins, by: this.state.me?.id }
+      const entry = { id: uuid(), type: 'sleep', t: Date.now(), detail: mins, by: this.state.me?.id, babyId: timerBabyId }
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
         toast: 'Sleep logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id },
@@ -804,7 +850,7 @@ export default class App extends React.Component {
       this._base = t.started_at
       const last = this.lastOf(['pump'])
       this.mountSheet({
-        editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true,
+        editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true, sheetChildId: timerBabyId,
         detail: this.amt(last ? (dSplit(last.detail).n ?? 4) : 4), detail2: mins, timerSide: null,
       })
     }
@@ -914,7 +960,8 @@ export default class App extends React.Component {
   openSheet = () => {
     this._base = Date.now()
     const k = this.predict()
-    this.mountSheet({ editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, manualDur: false })
+    // the sheet's child chip row starts on whoever the pills are showing
+    this.mountSheet({ editId: null, sel: k, offset: 0, pickedT: null, detail: k ? this.defaultDetail(k) : null, detail2: k ? this.defaultDetail2(k) : null, manualDur: false, sheetChildId: this.selChildId() })
   }
   defaultDetail(k) {
     const d = T(k).detail
@@ -930,7 +977,7 @@ export default class App extends React.Component {
   // ── provider export: CSV through the native share sheet (download fallback) ─
   exportRows() {
     const who = {}
-    for (const u of [this.state.me, this.state.partner]) if (u) who[u.id] = u.name || ''
+    for (const u of [this.state.me, this.state.partner, ...(this.state.members || [])]) if (u) who[u.id] = u.name || ''
     const pad = n => String(n).padStart(2, '0')
     // range chips: 7/30 count back from local midnight so "7 days" means the
     // bars' window (today + 6 before), 'all' is everything on the device
@@ -963,7 +1010,9 @@ export default class App extends React.Component {
   }
   exportName(kind) {
     const day = new Date().toISOString().slice(0, 10)
-    return ['baby-log', (this.state.babyName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-'), kind, day].filter(Boolean).join('-') + '.csv'
+    // exports read live(), so the file carries the selected child's name
+    const name = this.selChild()?.name || this.state.babyName || ''
+    return ['baby-log', name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), kind, day].filter(Boolean).join('-') + '.csv'
   }
   exportLog = () => {
     this.shareCsv(this.exportName('full'), [
@@ -1010,9 +1059,11 @@ export default class App extends React.Component {
       this.setState({ importBusy: false, toast: 'Nothing recognized — pick the CSV files Baby Buddy exports', undoAction: null })
       return this.bumpToast()
     }
+    // imported history lands on the child being viewed when the import ran
+    const importBabyId = this.selChildId()
     this.setState(s => {
       const have = new Set(s.entries.map(e => e.id))
-      const fresh = result.entries.filter(e => !have.has(e.id)).map(e => ({ ...e, by: s.me?.id }))
+      const fresh = result.entries.filter(e => !have.has(e.id)).map(e => ({ ...e, by: s.me?.id, babyId: importBabyId }))
       const skipped = result.skipped + (result.entries.length - fresh.length)
       return {
         importBusy: false,
@@ -1161,6 +1212,7 @@ export default class App extends React.Component {
   save = () => {
     const key = this.state.sel || this.predict() || 'bottle'
     const t = this.stamp(), detail = this.composeDetail(key)
+    const babyId = this.state.sheetChildId ?? this.selChildId()
     this.closeSheet()
     if (this.state.editId) {
       const id = this.state.editId
@@ -1168,14 +1220,14 @@ export default class App extends React.Component {
         // remember the pre-edit values so the toast's Undo can put them back
         const prev = s.entries.find(e => e.id === id)
         return {
-          entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e),
+          entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail, babyId } : e),
           outbox: [...new Set([...s.outbox, id])],
           toast: 'Entry updated',
-          undoAction: prev ? { kind: 'edit', id, prev: { type: prev.type, t: prev.t, detail: prev.detail } } : null,
+          undoAction: prev ? { kind: 'edit', id, prev: { type: prev.type, t: prev.t, detail: prev.detail, babyId: prev.babyId } } : null,
         }
       }, () => this.flushSoon())
     } else {
-      const entry = { id: uuid(), type: key, t, detail, by: this.state.me?.id }
+      const entry = { id: uuid(), type: key, t, detail, by: this.state.me?.id, babyId }
       this.setState(s => ({
         screen: 'home',
         entries: [entry, ...s.entries],
@@ -1215,7 +1267,7 @@ export default class App extends React.Component {
     if (a.kind === 'add') return this.markDeleted(a.id)
     this.setState(s => ({
       entries: s.entries.map(e => e.id === a.id
-        ? (a.kind === 'edit' ? { ...e, type: a.prev.type, t: a.prev.t, detail: a.prev.detail } : { ...e, deleted: false })
+        ? (a.kind === 'edit' ? { ...e, type: a.prev.type, t: a.prev.t, detail: a.prev.detail, babyId: a.prev.babyId } : { ...e, deleted: false })
         : e),
       outbox: [...new Set([...s.outbox, a.id])],
     }), () => this.flushSoon())
@@ -1223,7 +1275,8 @@ export default class App extends React.Component {
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
     this._base = e.t
-    this.mountSheet({ editId: id, sel: e.type, offset: 0, pickedT: null, ...this.decompose(e.type, e.detail) })
+    // seed the chip row from the entry so an untouched edit never re-homes it
+    this.mountSheet({ editId: id, sel: e.type, offset: 0, pickedT: null, sheetChildId: e.babyId ?? this.primaryChildId(), ...this.decompose(e.type, e.detail) })
   }
   remove = () => {
     const id = this.state.editId
@@ -1281,6 +1334,28 @@ export default class App extends React.Component {
     const partnerName = partner?.name || 'your partner'
     const initial = n => (n || '?').trim()[0]?.toUpperCase() || '?'
     const iAmOnDuty = !me || !s.onDutyUserId || s.onDutyUserId === me.id
+
+    // ── child switcher (only ever rendered with 2+ non-archived children —
+    // a single-child household sees exactly the UI it always has) ──────────────
+    const kids = (s.children || []).filter(c => !c.archived)
+    const selChild = this.selChild()
+    const selId = selChild ? selChild.id : null
+    // olive active state, same register as the until/export chips
+    const childChip = on => on
+      ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' }
+      : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }
+    const childPills = kids.length > 1 ? kids.map(c => ({
+      id: c.id, label: c.name, on: c.id === selId,
+      onTap: () => this.setState({ selectedChildId: c.id }),
+      ...childChip(c.id === selId),
+    })) : null
+    // quick-log sheet chip row: redirect a log without leaving the sheet
+    const sheetSelId = s.sheetChildId ?? selId
+    const sheetChildren = kids.length > 1 ? kids.map(c => ({
+      id: c.id, label: c.name, on: c.id === sheetSelId,
+      onTap: () => this.setState({ sheetChildId: c.id }),
+      ...childChip(c.id === sheetSelId),
+    })) : null
 
     const cards = this.widgetKeys().map(k => {
       const c = WIDGETS.find(w => w.key === k)
@@ -1561,7 +1636,12 @@ export default class App extends React.Component {
       today: new Date().toISOString().slice(0, 10),
       finishOnboard: this.finishOnboard,
 
-      babyName: s.babyName || 'Baby', ageLabel: this.ageInfo().label,
+      // headers follow the pills; the settings About card edits the primary
+      // child (that's what /baby writes), so it names the primary explicitly
+      babyName: (selChild && selChild.name) || s.babyName || 'Baby',
+      primaryBabyName: s.babyName || 'Baby',
+      ageLabel: this.ageInfo().label,
+      childPills, sheetChildren,
       dateLabel: new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
       sinceCards: cards, todaySummary, timeline,
       offline: s.offline,
@@ -1663,7 +1743,8 @@ export default class App extends React.Component {
         keep: () => this.dismissRec(trackRec.key),
       } : null,
       birthdate: s.babyBirthdate || '', setBirthdate: this.setBirthdate,
-      ageLine: s.babyBirthdate ? ageI.label + ' old' : 'Set it and the log thinks in their weeks — insights compare against their age.',
+      // the settings card is about the primary child, so its age line is too
+      ageLine: s.babyBirthdate ? this.ageInfoFor(s.babyBirthdate, s.age).label + ' old' : 'Set it and the log thinks in their weeks — insights compare against their age.',
       notify: (() => {
         const np = this.nPrefs()
         const row = (key, label, icon, color) => ({
@@ -1954,6 +2035,14 @@ export default class App extends React.Component {
               </button>
             </div>
 
+            {v.childPills && (
+              <div style={S('display:flex;gap:8px;padding:0 20px 12px;overflow:auto')}>
+                {v.childPills.map(c => (
+                  <button key={c.id} type="button" onClick={c.onTap} className={c.on ? undefined : 'hov-bd'} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:700;font-size:13px;color:${c.fg};cursor:pointer;letter-spacing:-0.01em`)}>{c.label}</button>
+                ))}
+              </div>
+            )}
+
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
 
               {v.timerActive && (
@@ -2161,6 +2250,14 @@ export default class App extends React.Component {
               )}
             </div>
 
+            {v.childPills && !v.dayView && (
+              <div style={S('display:flex;gap:8px;padding:0 20px 12px;overflow:auto')}>
+                {v.childPills.map(c => (
+                  <button key={c.id} type="button" onClick={c.onTap} className={c.on ? undefined : 'hov-bd'} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:700;font-size:13px;color:${c.fg};cursor:pointer;letter-spacing:-0.01em`)}>{c.label}</button>
+                ))}
+              </div>
+            )}
+
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
               {v.dayView ? (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);overflow:hidden')}>
@@ -2297,13 +2394,13 @@ export default class App extends React.Component {
               </button>
               <div style={S('display:flex;flex-direction:column;gap:1px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Settings</div>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.babyName}’s log</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.primaryBabyName}’s log</div>
               </div>
             </div>
 
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.babyName}</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.primaryBabyName}</div>
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
                   <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Name</div>
@@ -2618,6 +2715,15 @@ export default class App extends React.Component {
               </div>
               <div onPointerDown={v.sheetBodyDown} onPointerMove={v.sheetBodyMove} onPointerUp={v.sheetBodyUp} onPointerCancel={v.sheetBodyUp}
                 style={S('position:relative;z-index:1;flex:1;min-height:0;overflow:auto;touch-action:pan-y;overscroll-behavior:contain')}>
+
+                {v.sheetChildren && (
+                  <div style={S('display:flex;align-items:center;gap:8px;padding:0 4px 12px;overflow:auto')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;flex-shrink:0;padding-right:2px")}>For</div>
+                    {v.sheetChildren.map(c => (
+                      <button key={c.id} type="button" onClick={c.onTap} style={S(`flex-shrink:0;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:7px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                    ))}
+                  </div>
+                )}
 
                 {v.showStamp && (
                 <div style={S('display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px 12px')}>
