@@ -89,6 +89,21 @@ Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:
 
 `.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/baby-log-app` and `…-api` (`:latest` + commit SHA). These images are the basis for the future Unraid Community Apps template.
 
+## All-in-one image (Community Apps)
+
+[deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` + `/app` ws proxy on port 80), `artisan serve` (8 workers), Reverb, and `schedule:work` running; everything else matches the three-container compose stack.
+
+```bash
+docker build -f deploy/aio/Dockerfile -t baby-log-aio .        # from the repo root
+docker run -d -p 3500:80 -v /path/to/data:/data baby-log-aio
+```
+
+- **`/data` is the instance**: `database.sqlite` + a `.env` holding the secrets. Back up that volume and you have everything.
+- **Secrets self-generate on first boot** (CA templates can't generate secrets): an empty `/data` gets a fresh `APP_KEY` and `REVERB_*` written to `/data/.env`; later boots reuse it. Migrations run on every boot.
+- The generated `REVERB_APP_KEY` is stamped into the served PWA bundle at boot (the image bakes a placeholder), so realtime works without any build-time coupling.
+- **Config**: set container env vars (`APP_URL`, `MAIL_*`, `REVERB_ALLOWED_ORIGINS`, `BABYLOG_OPEN_REGISTRATION`, …) in the template, or append them to `/data/.env` and restart the container — container env wins over the file. (Editing `REVERB_APP_KEY` itself needs a re**create**, so the fresh filesystem gets re-stamped.)
+- Reverse proxy guidance is the same as above: point it at this container's port 80 with websocket support enabled.
+
 ## Troubleshooting
 
 | Symptom | Check |
