@@ -192,6 +192,24 @@ class BabylogApiTest extends TestCase
         $this->assertSame('clay', $this->getJson('/api/state', $this->authed($ben))->json('settings.theme.accent'));
     }
 
+    public function test_unit_setting_round_trips_to_the_partner(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $this->postJson('/api/settings', ['unit' => 'ml'], $this->authed($ben))->assertOk();
+        $this->assertSame('ml', $this->getJson('/api/state', $this->authed($kat))->json('settings.unit'));
+
+        // oz and ml only — amounts are stored in oz, so a free-form unit would lie
+        $this->postJson('/api/settings', ['unit' => 'litres'], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/settings', ['unit' => 'ML'], $this->authed($ben))->assertStatus(422);
+
+        // a client that predates units syncs settings without the key — unit survives
+        $this->postJson('/api/settings', ['tracking' => ['bath' => false]], $this->authed($kat))->assertOk();
+        $this->assertSame('ml', $this->getJson('/api/state', $this->authed($ben))->json('settings.unit'));
+    }
+
     public function test_settings_are_scoped_to_the_household(): void
     {
         config(['babylog.open_registration' => true]);
