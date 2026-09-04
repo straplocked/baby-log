@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\PushController;
 use App\Http\Controllers\Api\ShiftController;
@@ -14,6 +15,10 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middle
 
 Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
+
+    Route::post('/account/profile', [AccountController::class, 'profile']);
+    Route::post('/account/email', [AccountController::class, 'email']);
+    Route::post('/account/password', [AccountController::class, 'password']);
 
     Route::get('/state', [SyncController::class, 'state']);
     Route::post('/baby', [SyncController::class, 'setBaby']);

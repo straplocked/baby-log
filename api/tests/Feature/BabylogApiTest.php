@@ -315,6 +315,77 @@ class BabylogApiTest extends TestCase
         $this->assertNotSame('requested', $state['shift']['state']);
     }
 
+    // ── account (name / email / password) ─────────────────────────────────────
+
+    public function test_profile_name_change_syncs_to_the_partner(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $this->postJson('/api/account/profile', ['name' => 'Benjamin'], $this->authed($ben))->assertOk();
+
+        $this->assertSame('Benjamin', $this->getJson('/api/state', $this->authed($ben))->json('user.name'));
+        $this->assertSame('Benjamin', $this->getJson('/api/state', $this->authed($kat))->json('partner.name'));
+
+        // a blank name is rejected and changes nothing
+        $this->postJson('/api/account/profile', ['name' => ''], $this->authed($ben))->assertStatus(422);
+        $this->assertSame('Benjamin', $this->getJson('/api/state', $this->authed($ben))->json('user.name'));
+    }
+
+    public function test_email_change_requires_the_current_password(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        // wrong password → rejected, address untouched
+        $this->postJson('/api/account/email', ['email' => 'new@example.com', 'password' => 'wrong-password'], $this->authed($ben))->assertStatus(422);
+        $this->assertSame('ben@example.com', $this->getJson('/api/state', $this->authed($ben))->json('user.email'));
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
+
+        // right password → stored lowercased, and login follows the new address
+        $this->postJson('/api/account/email', ['email' => 'New.Ben@Example.com', 'password' => 'password123'], $this->authed($ben))->assertOk();
+        $this->assertSame('new.ben@example.com', $this->getJson('/api/state', $this->authed($ben))->json('user.email'));
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'new.ben@example.com', 'password' => 'password123'])->assertOk();
+    }
+
+    public function test_email_change_rejects_a_duplicate_email(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->assertCreated();
+
+        // the partner's address is taken — case games don't sneak past the check
+        $this->postJson('/api/account/email', ['email' => 'Katrina@Example.com', 'password' => 'password123'], $this->authed($ben))->assertStatus(422);
+        $this->assertSame('ben@example.com', $this->getJson('/api/state', $this->authed($ben))->json('user.email'));
+
+        // re-saving your own address is not a duplicate
+        $this->postJson('/api/account/email', ['email' => 'ben@example.com', 'password' => 'password123'], $this->authed($ben))->assertOk();
+    }
+
+    public function test_password_change_requires_current_and_logs_out_other_phones(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $otherPhone = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
+
+        // wrong current password → rejected, the old password still works
+        $this->postJson('/api/account/password', ['current_password' => 'wrong-password', 'password' => 'newpassword9'], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
+
+        // a too-short replacement is rejected too
+        $this->postJson('/api/account/password', ['current_password' => 'password123', 'password' => 'short'], $this->authed($ben))->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
+
+        $this->postJson('/api/account/password', ['current_password' => 'password123', 'password' => 'newpassword9'], $this->authed($ben))->assertOk();
+
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertStatus(422);
+        $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'newpassword9'])->assertOk();
+
+        // the session that changed the password survives; every other one is dead
+        $this->getJson('/api/state', $this->authed($ben))->assertOk();
+        $this->getJson('/api/state', $this->authed($otherPhone))->assertStatus(401);
+    }
+
     // ── email flows (invite mail + password reset) ────────────────────────────
 
     public function test_invite_emails_the_partner_when_mail_is_configured(): void

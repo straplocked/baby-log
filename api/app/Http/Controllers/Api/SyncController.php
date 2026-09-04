@@ -36,7 +36,7 @@ class SyncController extends Controller
         $shift = $household->shifts()->latest('id')->first();
 
         return response()->json([
-            'user' => ['id' => $user->id, 'name' => $user->name, 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
+            'user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
             'invitePending' => $household->invite_email,
             'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label, 'birthdate' => $household->baby->birthdate] : null,
