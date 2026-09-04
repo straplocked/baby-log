@@ -2,13 +2,13 @@
 
 **Your baby's data on your own server.** Baby Log is a self-hosted baby tracker built for exactly two parents sharing one baby's log — true realtime sync between both phones, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
 
-<!-- screenshots:start -->
+<!-- screenshots:start — uncomment this block once docs/media/{now,history,settings}.png are committed
 <p align="center">
   <img src="docs/media/now.png" alt="Now screen — since-cards, timers, and the on-duty banner" width="30%">
   <img src="docs/media/history.png" alt="History screen — 7-day charts, totals, and the day timeline" width="30%">
   <img src="docs/media/settings.png" alt="Settings screen — household, units, tracking, and export" width="30%">
 </p>
-<!-- screenshots:end -->
+screenshots:end -->
 
 ## What it does
 
