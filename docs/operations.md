@@ -98,3 +98,4 @@ Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:
 | "invite-only" on a legit partner signup | Exact email match required (lowercased) + the code from the invite toast; re-invite to regenerate a code |
 | Update script fails on compose | Compose Manager plugin must be installed (provides `docker compose`) |
 | Wrong/lost secrets | `.env` in appdata; APP_KEY changes invalidate nothing critical (tokens are hashed, not encrypted) but keep it stable anyway |
+| A phone suddenly asks to log in again | Expected every ~90 days — API tokens expire 90 days after login (counted from login, not last use); logging back in is the whole fix |
