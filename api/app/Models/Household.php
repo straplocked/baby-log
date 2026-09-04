@@ -5,12 +5,11 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Collection;
 
 class Household extends Model
 {
-    protected $fillable = ['invite_email', 'invite_code_hash', 'on_duty_user_id', 'settings', 'active_timer'];
-
-    protected $hidden = ['invite_code_hash'];
+    protected $fillable = ['on_duty_user_id', 'settings', 'active_timer'];
 
     protected $casts = ['settings' => 'array', 'active_timer' => 'array'];
 
@@ -19,9 +18,24 @@ class Household extends Model
         return $this->hasMany(User::class);
     }
 
+    public function children(): HasMany
+    {
+        return $this->hasMany(Baby::class)->orderBy('id');
+    }
+
+    /**
+     * The primary (oldest) child — kept for clients that predate multi-child.
+     * A plain ordered HasOne (not oldestOfMany) so setBaby's updateOrCreate
+     * still writes through it.
+     */
     public function baby(): HasOne
     {
-        return $this->hasOne(Baby::class);
+        return $this->hasOne(Baby::class)->orderBy('id');
+    }
+
+    public function invites(): HasMany
+    {
+        return $this->hasMany(Invite::class);
     }
 
     public function entries(): HasMany
@@ -34,8 +48,15 @@ class Household extends Model
         return $this->hasMany(Shift::class);
     }
 
+    /** Every member except the given one, in id order. */
+    public function othersFor(User $user): Collection
+    {
+        return $this->users->where('id', '!=', $user->id)->sortBy('id')->values();
+    }
+
+    /** Legacy accessor: "the other grown-up" — now simply the first other member. */
     public function partnerOf(User $user): ?User
     {
-        return $this->users->firstWhere('id', '!=', $user->id);
+        return $this->othersFor($user)->first();
     }
 }
