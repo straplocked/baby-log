@@ -39,7 +39,11 @@ export const api = {
   accountPassword: b => call('/account/password', { method: 'POST', body: b }), // {current_password, password}
   state: since => call('/state?since=' + (since || 0)),
   setBaby: b => call('/baby', { method: 'POST', body: b }),
-  invite: email => call('/invite', { method: 'POST', body: { email } }),
+  // create ({name, birthdate?}) or update ({id, name, ...}) one child; archive via {archived}
+  setChild: b => call('/children', { method: 'POST', body: b }),
+  invite: (email, role) => call('/invite', { method: 'POST', body: { email, ...(role ? { role } : {}) } }), // role: 'parent' | 'caregiver'
+  revokeInvite: email => call('/invite/revoke', { method: 'POST', body: { email } }),
+  removeMember: userId => call('/household/remove-member', { method: 'POST', body: { user_id: userId } }),
   saveSettings: settings => call('/settings', { method: 'POST', body: settings }),
   pushSubscribe: b => call('/push/subscribe', { method: 'POST', body: b }), // {endpoint, keys:{p256dh,auth}, tz}
   pushUnsubscribe: endpoint => call('/push/unsubscribe', { method: 'POST', body: { endpoint } }),
