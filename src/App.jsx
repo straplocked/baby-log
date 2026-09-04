@@ -183,6 +183,12 @@ const Sym = ({ style, children }) => (
   <span style={{ fontFamily: "'Material Symbols Rounded'", lineHeight: 1, ...style }}>{children}</span>
 )
 
+// queued-but-unsynced marker: a dimmed dot on a row's sub line, same register
+// as the header's "· offline" — it clears the moment the outbox flushes
+const PendingDot = () => (
+  <span style={S('display:inline-block;width:5px;height:5px;border-radius:999px;background:rgba(38,35,29,0.30);margin-left:6px;vertical-align:1px')} />
+)
+
 export default class App extends React.Component {
   constructor(props) {
     super(props)
@@ -196,7 +202,7 @@ export default class App extends React.Component {
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       activeTimer: null, timerSide: null, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
-      toast: null, toastLeaving: false, lastAdded: null,
+      toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
@@ -301,10 +307,13 @@ export default class App extends React.Component {
     try {
       if (this.state.outbox.length) {
         const ids = new Set(this.state.outbox)
-        const payload = this.state.entries.filter(e => ids.has(e.id))
+        const pushed = new Map(this.state.entries.filter(e => ids.has(e.id)).map(e => [e.id, e]))
+        const payload = [...pushed.values()]
           .map(e => ({ id: e.id, type: e.type, t: e.t, detail: e.detail == null ? null : String(e.detail), deleted: !!e.deleted }))
         if (payload.length) await api.pushEntries(payload)
-        this.setState(s => ({ outbox: s.outbox.filter(id => !ids.has(id)) }))
+        // an undo/edit while the push was in flight makes a new entry object —
+        // keep that id queued so the newer write still pushes (and wins) next flush
+        this.setState(s => ({ outbox: s.outbox.filter(id => !ids.has(id) || s.entries.find(e => e.id === id) !== pushed.get(id)) }))
       }
       if (this.state.settingsDirty) {
         const pushed = this.state.settings
@@ -416,7 +425,7 @@ export default class App extends React.Component {
       this.setState({
         screen: 'auth', authMode: 'login', authEmail: s.resetEmail, authError: null,
         resetToken: null, resetPw: '', resetBusy: false,
-        toast: 'Password updated — log in with the new one', lastAdded: null,
+        toast: 'Password updated — log in with the new one', undoAction: null,
       })
       this.bumpToast()
     } catch (e) {
@@ -444,11 +453,11 @@ export default class App extends React.Component {
       this.setState({
         invitePending: email, inviteCode: r.code, inviteMailed: !!r.mailed,
         toast: r.mailed ? 'Emailed ' + email + ' — their code is ' + r.code : 'Invited ' + email + ' — their code is ' + r.code,
-        lastAdded: null,
+        undoAction: null,
       })
       this.bumpToast()
     } catch (e) {
-      this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', lastAdded: null })
+      this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', undoAction: null })
       this.bumpToast()
     }
   }
@@ -514,11 +523,11 @@ export default class App extends React.Component {
           try { await api.pushUnsubscribe(sub.endpoint) } catch { /* row prunes itself on next push */ }
           await sub.unsubscribe()
         }
-        this.setState({ pushOn: false, toast: 'Notifications off for this phone', lastAdded: null })
+        this.setState({ pushOn: false, toast: 'Notifications off for this phone', undoAction: null })
       } else {
         const sub = await subscribePush(this.state.vapidKey)
         await api.pushSubscribe({ endpoint: sub.endpoint, keys: sub.toJSON().keys, tz: deviceTz() })
-        this.setState({ pushOn: true, toast: 'This phone will get pings', lastAdded: null })
+        this.setState({ pushOn: true, toast: 'This phone will get pings', undoAction: null })
         this.setNotify({}) // stamp the device tz into prefs right away
       }
     } catch (e) {
@@ -526,7 +535,7 @@ export default class App extends React.Component {
         toast: e && e.message === 'denied'
           ? 'Notifications are blocked — allow them in your browser settings'
           : 'Couldn’t turn notifications on — try again',
-        lastAdded: null,
+        undoAction: null,
       })
     }
     this.setState({ pushBusy: false })
@@ -635,7 +644,7 @@ export default class App extends React.Component {
       this.setState(st => ({
         acctBusy: false, acctOpen: null, acctEmail: '', acctEmailPw: '',
         me: st.me ? { ...st.me, email: r.email } : st.me,
-        toast: 'Email updated — log in with ' + r.email + ' next time', lastAdded: null,
+        toast: 'Email updated — log in with ' + r.email + ' next time', undoAction: null,
       }))
       this.bumpToast()
     } catch (e) { this.acctFail(e) }
@@ -649,7 +658,7 @@ export default class App extends React.Component {
       await api.accountPassword({ current_password: s.acctPwCur, password: s.acctPwNew })
       this.setState({
         acctBusy: false, acctOpen: null, acctPwCur: '', acctPwNew: '',
-        toast: 'Password updated — other phones will need to log in again', lastAdded: null,
+        toast: 'Password updated — other phones will need to log in again', undoAction: null,
       })
       this.bumpToast()
     } catch (e) { this.acctFail(e) }
@@ -758,7 +767,7 @@ export default class App extends React.Component {
       const entry = { id: uuid(), type: 'nurse', t: t.started_at, detail, by: this.state.me?.id }
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
-        toast: 'Nursing logged · ' + this.dur(mins), lastAdded: entry.id, timerSide: null,
+        toast: 'Nursing logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id }, timerSide: null,
       }), () => this.flushSoon())
       this.bumpToast()
     } else if (t.type === 'sleep') {
@@ -768,7 +777,7 @@ export default class App extends React.Component {
       const entry = { id: uuid(), type: 'sleep', t: Date.now(), detail: mins, by: this.state.me?.id }
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
-        toast: 'Sleep logged · ' + this.dur(mins), lastAdded: entry.id,
+        toast: 'Sleep logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id },
       }), () => this.flushSoon())
       this.bumpToast()
     } else {
@@ -788,7 +797,7 @@ export default class App extends React.Component {
   shiftFail = e => {
     if (e && e.status) {
       const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
-      this.setState({ toast: first || e.message || 'That didn’t go through — try again', lastAdded: null })
+      this.setState({ toast: first || e.message || 'That didn’t go through — try again', undoAction: null })
       this.bumpToast()
       this.sync()
     } else this.setState({ offline: true })
@@ -838,7 +847,7 @@ export default class App extends React.Component {
       shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
       onDutyUserId: st.me?.id ?? st.onDutyUserId,
       serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, started_at: Date.now() },
-      toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', lastAdded: null,
+      toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', undoAction: null,
     }), () => this.bumpToast())
     api.shiftAccept(plan, until).then(r => this.setState({ serverShift: r.shift })).catch(this.shiftFail)
   }
@@ -864,7 +873,7 @@ export default class App extends React.Component {
     this.closeShift()
     this.setState(s => ({
       serverShift: { id: -3, state: 'requested', requester_id: s.me?.id, note, requested_at: Date.now() },
-      toast: (partner?.name || 'Your partner') + ' will get your handoff ask', lastAdded: null,
+      toast: (partner?.name || 'Your partner') + ' will get your handoff ask', undoAction: null,
     }), () => this.bumpToast())
     api.shiftRequest(note).catch(this.shiftFail)
   }
@@ -1103,18 +1112,23 @@ export default class App extends React.Component {
     this.closeSheet()
     if (this.state.editId) {
       const id = this.state.editId
-      this.setState(s => ({
-        entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e),
-        outbox: [...new Set([...s.outbox, id])],
-        toast: 'Entry updated', lastAdded: null,
-      }), () => this.flushSoon())
+      this.setState(s => {
+        // remember the pre-edit values so the toast's Undo can put them back
+        const prev = s.entries.find(e => e.id === id)
+        return {
+          entries: s.entries.map(e => e.id === id ? { ...e, type: key, t, detail } : e),
+          outbox: [...new Set([...s.outbox, id])],
+          toast: 'Entry updated',
+          undoAction: prev ? { kind: 'edit', id, prev: { type: prev.type, t: prev.t, detail: prev.detail } } : null,
+        }
+      }, () => this.flushSoon())
     } else {
       const entry = { id: uuid(), type: key, t, detail, by: this.state.me?.id }
       this.setState(s => ({
         screen: 'home',
         entries: [entry, ...s.entries],
         outbox: [...s.outbox, entry.id],
-        toast: T(key).label + ' logged · ' + this.clock(t), lastAdded: entry.id,
+        toast: T(key).label + ' logged · ' + this.clock(t), undoAction: { kind: 'add', id: entry.id },
       }), () => this.flushSoon())
     }
     this.bumpToast()
@@ -1128,7 +1142,7 @@ export default class App extends React.Component {
       this.setState({ toastLeaving: true })
       this._toGone = setTimeout(() => {
         this._toGone = null
-        this.setState({ toast: null, lastAdded: null, toastLeaving: false })
+        this.setState({ toast: null, undoAction: null, toastLeaving: false })
       }, reduceMotion() ? 0 : 220)
     }, 6000)
   }
@@ -1138,10 +1152,21 @@ export default class App extends React.Component {
       outbox: [...new Set([...s.outbox, id])],
     }), () => this.flushSoon())
   }
+  // one-shot undo of the last action only (add → delete it, edit → restore the
+  // old values, delete → clear the tombstone). Each path re-queues the id, so
+  // the undone write pushes after the original and wins last-write-wins —
+  // including a restore against its own already-synced tombstone.
   undo = () => {
-    const id = this.state.lastAdded
-    this.setState({ toast: null, toastLeaving: false, lastAdded: null })
-    if (id) this.markDeleted(id)
+    const a = this.state.undoAction
+    this.setState({ toast: null, toastLeaving: false, undoAction: null })
+    if (!a) return
+    if (a.kind === 'add') return this.markDeleted(a.id)
+    this.setState(s => ({
+      entries: s.entries.map(e => e.id === a.id
+        ? (a.kind === 'edit' ? { ...e, type: a.prev.type, t: a.prev.t, detail: a.prev.detail } : { ...e, deleted: false })
+        : e),
+      outbox: [...new Set([...s.outbox, a.id])],
+    }), () => this.flushSoon())
   }
   edit = id => () => {
     const e = this.state.entries.find(x => x.id === id)
@@ -1151,7 +1176,7 @@ export default class App extends React.Component {
   remove = () => {
     const id = this.state.editId
     this.closeSheet()
-    this.setState({ toast: 'Entry deleted', lastAdded: null })
+    this.setState({ toast: 'Entry deleted', undoAction: id ? { kind: 'delete', id } : null })
     if (id) this.markDeleted(id)
     this.bumpToast()
   }
@@ -1222,9 +1247,12 @@ export default class App extends React.Component {
       this.trackOn('diapers') ? td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : null,
     ].filter(Boolean).join(' · ')
 
+    // queued-but-unsynced rows get a dimmed dot until the outbox flushes
+    const pendingIds = new Set(s.outbox)
     const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
       time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
+      pending: pendingIds.has(e.id),
     }))
 
     // every day on the device, grouped for the History drill-down
@@ -1256,6 +1284,7 @@ export default class App extends React.Component {
       rows: [...dayEvs].sort((a, b) => a.t - b.t).map(e => ({
         time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e, true),
         icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
+        pending: pendingIds.has(e.id),
       })),
       prev: s.historyDay > oldestKey ? () => this.setState({ historyDay: dayShift(s.historyDay, -1) }) : null,
       next: s.historyDay < todayKey ? () => this.setState({ historyDay: dayShift(s.historyDay, 1) }) : null,
@@ -1445,7 +1474,7 @@ export default class App extends React.Component {
       authInvite: s.authInvite, setAuthInvite: e => this.setState({ authInvite: e.target.value }),
       authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
       authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
-      socialTap: () => { this.setState({ toast: 'Email sign-in only for now', lastAdded: null }); this.bumpToast() },
+      socialTap: () => { this.setState({ toast: 'Email sign-in only for now', undoAction: null }); this.bumpToast() },
       forgotOpen: s.forgotOpen,
       toggleForgot: () => this.setState(x => ({ forgotOpen: !x.forgotOpen, forgotResult: null, forgotEmail: x.forgotEmail || x.authEmail })),
       forgotEmail: s.forgotEmail, setForgotEmail: e => this.setState({ forgotEmail: e.target.value, forgotResult: null }),
@@ -1512,7 +1541,7 @@ export default class App extends React.Component {
       timerWho: at ? (at.user_id === me?.id ? 'You' : partnerName) : '',
       stopTimer: this.stopTimer,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
-      editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '', toastLeaving: s.toastLeaving,
+      editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '', toastLeaving: s.toastLeaving, canUndo: !!s.undoAction,
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
 
       handoffRows,
@@ -1993,7 +2022,7 @@ export default class App extends React.Component {
                     </div>
                     <div style={S('flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
                       <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
-                      <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}</div>
+                      <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}{e.pending && <PendingDot />}</div>
                     </div>
                     <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                   </button>
@@ -2054,7 +2083,7 @@ export default class App extends React.Component {
                       </div>
                       <div style={S('flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
                         <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
-                        <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}</div>
+                        <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}{e.pending && <PendingDot />}</div>
                       </div>
                       <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                     </button>
@@ -2459,7 +2488,7 @@ export default class App extends React.Component {
             pointerEvents: v.toastLeaving ? 'none' : 'auto',
           }}>
             <div style={S('flex:1;min-width:0;font-size:14px;color:#FAF6EF')}>{v.toastText}</div>
-            <button type="button" onClick={v.undo} style={S("background:rgba(250,246,239,0.16);border:none;border-radius:999px;padding:7px 14px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#FAF6EF;cursor:pointer")}>Undo</button>
+            {v.canUndo && <button type="button" onClick={v.undo} style={S("background:rgba(250,246,239,0.16);border:none;border-radius:999px;padding:7px 14px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#FAF6EF;cursor:pointer")}>Undo</button>}
           </div>
         )}
 
