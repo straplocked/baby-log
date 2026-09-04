@@ -56,6 +56,8 @@ class PushController extends Controller
             'partner' => ['sometimes', 'boolean'],
             'feed' => ['sometimes', 'boolean'],
             'feedEvery' => ['sometimes', 'nullable', 'integer', 'in:120,150,180,210,240'],
+            'feedEveryByChild' => ['sometimes', 'array'],
+            'feedEveryByChild.*' => ['nullable', 'integer', 'in:120,150,180,210,240'],
             'onDutyOnly' => ['sometimes', 'boolean'],
             'wake' => ['sometimes', 'boolean'],
             'meds' => ['sometimes', 'boolean'],
@@ -67,6 +69,15 @@ class PushController extends Controller
         ]);
 
         $user = $request->user();
+        if (array_key_exists('feedEveryByChild', $data)) {
+            // the map replaces wholesale (the client always sends the full map) —
+            // keys for children outside this household, and null "inherit" values,
+            // are silently dropped rather than rejected, so a stale client can't
+            // brick its own prefs save
+            $childIds = $user->household?->children()->pluck('id')->all() ?? [];
+            $kept = array_intersect_key($data['feedEveryByChild'] ?? [], array_flip($childIds));
+            $data['feedEveryByChild'] = array_map('intval', array_filter($kept, fn ($v) => $v !== null));
+        }
         $user->update(['notify_prefs' => array_merge($user->notify_prefs ?? [], $data)]);
 
         // prefs are per-user but ride /state — poke so my *other* devices converge
