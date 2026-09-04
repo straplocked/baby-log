@@ -30,5 +30,5 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - ~~**Sanctum tokens never expire**; each login adds a row. Add expiry + pruning eventually.~~ Fixed 2026-09-03: tokens expire after 90 days (`sanctum.expiration`) and `sanctum:prune-expired` reaps week-old expired rows daily via the existing scheduler. Note: expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
 - **No admin/first-user tooling**: wiping data is the only way to un-claim an instance (`babylog-reset-data`).
 - nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
-- Frontend has no test suite (the API has 51 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
+- Frontend has no test suite (the API has 52 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.
