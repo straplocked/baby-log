@@ -5,6 +5,7 @@ import { api, getToken, setToken } from './api'
 import { startEcho, stopEcho, isEchoConnected } from './echo'
 import { pushSupported, pushSubscription, subscribePush, deviceTz } from './push'
 import { getFx, setFx, initFx, isDark, askTiltPermission, reduceMotion } from './fx'
+import { mapBabyBuddy, chunk } from './bbimport'
 
 // ── domain constants (from design/Baby Log.dc.html) ──────────────────────────
 const TYPES = [
@@ -209,6 +210,7 @@ export default class App extends React.Component {
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       exportRange: 'all', // ephemeral — resets to Everything each load on purpose
+      importBusy: false, // Baby Buddy CSV import in flight — ephemeral
       // account editing (settings) — ephemeral, seeded from me/baby when the screen opens
       acctName: '', acctBabyName: '', acctOpen: null, // null | 'email' | 'password'
       acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '', acctBusy: false, acctError: null,
@@ -310,7 +312,10 @@ export default class App extends React.Component {
         const pushed = new Map(this.state.entries.filter(e => ids.has(e.id)).map(e => [e.id, e]))
         const payload = [...pushed.values()]
           .map(e => ({ id: e.id, type: e.type, t: e.t, detail: e.detail == null ? null : String(e.detail), deleted: !!e.deleted }))
-        if (payload.length) await api.pushEntries(payload)
+        // the server caps 500 entries per batch — a Baby Buddy import (or any
+        // bulk enqueue) flushes in slices; a failed slice throws, leaves the
+        // outbox intact, and the idempotent upsert re-pushes it next sync
+        for (const slice of chunk(payload, 500)) await api.pushEntries(slice)
         // an undo/edit while the push was in flight makes a new entry object —
         // keep that id queued so the newer write still pushes (and wins) next flush
         this.setState(s => ({ outbox: s.outbox.filter(id => !ids.has(id) || s.entries.find(e => e.id === id) !== pushed.get(id)) }))
@@ -986,6 +991,38 @@ export default class App extends React.Component {
       ...[...days.entries()].map(([date, d]) =>
         [date, d.feeds, d.oz ? this.amt(d.oz) : '', d.nurseMin || '', d.pumpOz ? this.amt(d.pumpOz) : '', d.wet, d.dirty, d.sleepMin || '', d.baths || '', d.meds || ''].join(',')),
     ])
+  }
+
+  // Baby Buddy CSV import (Settings): per-model export files → entries. Ids are
+  // deterministic from the source rows (src/bbimport.js), and POST /entries is
+  // an upsert keyed on id — so a re-import can only re-write identical entries,
+  // never duplicate them; anything already in the local log counts as skipped.
+  importBabyBuddy = async input => {
+    const files = [...(input.files || [])]
+    input.value = '' // let the same file be picked again later
+    if (!files.length || this.state.importBusy) return
+    this.setState({ importBusy: true })
+    let result = null
+    try {
+      result = mapBabyBuddy(await Promise.all(files.map(async f => ({ name: f.name, text: await f.text() }))))
+    } catch { /* unreadable file — fall through to the empty-result toast */ }
+    if (!result || (!result.entries.length && !result.skipped)) {
+      this.setState({ importBusy: false, toast: 'Nothing recognized — pick the CSV files Baby Buddy exports', undoAction: null })
+      return this.bumpToast()
+    }
+    this.setState(s => {
+      const have = new Set(s.entries.map(e => e.id))
+      const fresh = result.entries.filter(e => !have.has(e.id)).map(e => ({ ...e, by: s.me?.id }))
+      const skipped = result.skipped + (result.entries.length - fresh.length)
+      return {
+        importBusy: false,
+        entries: [...fresh, ...s.entries].sort((a, b) => b.t - a.t),
+        outbox: [...s.outbox, ...fresh.map(e => e.id)],
+        toast: 'Imported ' + fresh.length + (fresh.length === 1 ? ' entry' : ' entries') + (skipped ? ' · ' + skipped + ' skipped' : ''),
+        undoAction: null,
+      }
+    }, () => this.flushSoon())
+    this.bumpToast()
   }
 
   // detail state ↔ wire string: primary (amount/side/duration) in `detail`, extra (milk/minutes) in `detail2`
@@ -1702,6 +1739,7 @@ export default class App extends React.Component {
         tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
       },
       exportLog: this.exportLog, exportSummary: this.exportSummary,
+      importBB: e => this.importBabyBuddy(e.currentTarget), importBusy: s.importBusy,
       exportRanges: [[7, '7 days'], [30, '30 days'], ['all', 'Everything']].map(([val, label]) => {
         const on = s.exportRange === val
         return { label, onTap: () => this.setState({ exportRange: val }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
@@ -2453,6 +2491,20 @@ export default class App extends React.Component {
                   <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>ios_share</Sym>
                 </button>
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Opens your phone’s share sheet as a CSV — send it by email or message.</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Bring your history over</div>
+                <label className="hov-row" style={S('width:100%;box-sizing:border-box;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 300)' }}>child_care</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Import from Baby Buddy</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>{v.importBusy ? 'Importing…' : 'Feedings, pumping, diapers & sleep CSVs'}</div>
+                  </div>
+                  <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>upload_file</Sym>
+                  <input type="file" accept=".csv,text/csv" multiple onChange={v.importBB} style={S('display:none')} />
+                </label>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Pick the CSV files Baby Buddy exports (one per type) — you can select several at once, and importing the same file twice won’t duplicate anything.</div>
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
