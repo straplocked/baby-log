@@ -27,8 +27,8 @@ Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed
 
 ## Deploy
 
-- Production = Unraid "NAS" (`<nas-host>`, no SSH — drive the webGui via the user's Chrome; User Scripts plugin runs commands). `babylog-update` pulls `main` and rebuilds; `babylog-reset-data` wipes the DB.
-- Public URL: https://babylog.example.com (NPM at `<proxy-ip>:81`, websockets ON).
+- Production = an Unraid box (no SSH — drive the webGui via the user's Chrome; User Scripts plugin runs commands). `babylog-update` pulls `main` and rebuilds; `babylog-reset-data` wipes the DB.
+- Public URL, LAN addresses, and reverse-proxy details are deliberately NOT in this repo (it's going public) — they live in Claude's private memory. Never write them into tracked files.
 - Registration is invite-only — never register test accounts against production; the first account claims a fresh instance.
 - Full runbook: [docs/operations.md](docs/operations.md).
 

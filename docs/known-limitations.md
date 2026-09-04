@@ -29,6 +29,6 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - `artisan serve` (8 workers) as the production server — fine for 2 users; FPM/Octane if scope grows.
 - **Sanctum tokens never expire**; each login adds a row. Add expiry + pruning eventually.
 - **No admin/first-user tooling**: wiping data is the only way to un-claim an instance (`babylog-reset-data`).
-- nginx rate limits key on the proxy's IP (instance-wide behind NPM/Cloudflare) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
+- nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
 - Frontend has no test suite (the API has 12 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.

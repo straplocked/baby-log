@@ -1,6 +1,6 @@
 # Operations
 
-Runbook for this instance. Production is the Unraid box ("NAS", `<nas-ip>`, webGui `http://<nas-host>`), public at **https://babylog.example.com**.
+Runbook for a self-hosted instance. Production is an Unraid box (referred to as the "NAS" below; `<nas-ip>` stands in for its LAN address), optionally published at a public domain through a reverse proxy.
 
 ## Layout on Unraid
 
@@ -32,13 +32,13 @@ Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Scrip
 
 ## Backups
 
-The entire state is one file: `/mnt/user/appdata/baby-log/data/database.sqlite` (plus `.env` for the secrets). The **Appdata Backup** plugin already installed on the NAS covers `appdata/baby-log` — verify it's included in its share list. Manual restore: stop api+reverb, replace the sqlite file, start.
+The entire state is one file: `/mnt/user/appdata/baby-log/data/database.sqlite` (plus `.env` for the secrets). Unraid's **Appdata Backup** plugin covers `appdata/baby-log` if installed — verify it's included in its share list. Manual restore: stop api+reverb, replace the sqlite file, start.
 
-## Remote access (NPM)
+## Remote access (reverse proxy)
 
-Nginx Proxy Manager (`<proxy-ip>:81`) proxy host: `babylog.example.com → http://<nas-ip>:3500` with **Websockets Support** (required for Reverb), Block Common Exploits, Force SSL, HTTP/2, Let's Encrypt cert. DNS is the existing Cloudflare wildcard.
+Point your reverse proxy (e.g. Nginx Proxy Manager) at the app container: `your-domain → http://<nas-ip>:3500` with **websocket support enabled** (required for Reverb), plus the usual Force SSL / HTTP/2 / Let's Encrypt cert.
 
-If realtime breaks remotely but works on LAN, check the websocket toggle on the NPM host first.
+If realtime breaks remotely but works on LAN, check the websocket toggle on the proxy host first.
 
 ## Registration policy
 
@@ -60,7 +60,7 @@ MAIL_FROM_ADDRESS=you@example.com
 
 Then run **`babylog-update`** once. That's required, not optional: compose only injects `.env` values into the containers when it (re)creates them, and the update script's `docker compose up -d` recreates api+reverb because their environment changed. Nothing else — no config cache to clear (the containers don't run `config:cache`), no manual container restarts.
 
-With mail on: invites also email the code to the partner (the on-screen code still works and stays the source of truth), and "Forgot password?" emails a reset link pointing at `APP_URL/?reset=…` — so `APP_URL` in that same `.env` must be the real public origin (`https://babylog.example.com`) or the links will point somewhere useless. A failed SMTP send never blocks an invite; it falls back to code-only (`mailed: false`).
+With mail on: invites also email the code to the partner (the on-screen code still works and stays the source of truth), and "Forgot password?" emails a reset link pointing at `APP_URL/?reset=…` — so `APP_URL` in that same `.env` must be the real public origin (e.g. `https://babylog.example.com`) or the links will point somewhere useless. A failed SMTP send never blocks an invite; it falls back to code-only (`mailed: false`).
 
 ## Local development
 
