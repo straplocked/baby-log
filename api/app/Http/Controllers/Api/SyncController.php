@@ -43,6 +43,10 @@ class SyncController extends Controller
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
             'members' => $household->users->sortBy('id')->values()
                 ->map(fn (User $u) => ['id' => $u->id, 'name' => $u->name, 'role' => $u->role ?? 'parent'])->all(),
+            // who used to be here — snapshots taken at remove-member time so
+            // old entries' user_ids still resolve to a name
+            'formerMembers' => collect($household->former_members ?? [])
+                ->map(fn ($m) => ['id' => (int) $m['id'], 'name' => (string) $m['name']])->values()->all(),
             'invites' => $invites->map(fn ($i) => ['email' => $i->email, 'role' => $i->role])->all(),
             // old clients only know about one pending seat — show them the first
             'invitePending' => $invites->first()?->email,
@@ -55,6 +59,11 @@ class SyncController extends Controller
             'shift' => $shift,
             'timer' => $household->active_timer,
             'entries' => $entries,
+            // server caps, so clients can grey out "add" buttons instead of 422ing
+            'limits' => [
+                'maxMembers' => (int) config('babylog.max_household_users'),
+                'maxChildren' => (int) config('babylog.max_children'),
+            ],
             'serverTime' => now()->getTimestampMs(),
             'vapidPublicKey' => app(PushService::class)->publicKey(),
         ]);
@@ -261,6 +270,15 @@ class SyncController extends Controller
             ->update(['state' => 'cancelled']);
         $household->shifts()->where('state', 'active')->where('user_id', $target->id)
             ->update(['state' => 'cancelled', 'ended_at' => now()->getTimestampMs()]);
+
+        // snapshot {id, name} before the row goes: entries keep their user_id,
+        // and this list lets clients still put a name to it (dedupe by id in
+        // case an id is ever seen twice)
+        $former = collect($household->former_members ?? [])
+            ->reject(fn ($m) => (int) ($m['id'] ?? 0) === $target->id)
+            ->push(['id' => $target->id, 'name' => $target->name])
+            ->values()->all();
+        $household->update(['former_members' => $former]);
 
         $target->delete();
 

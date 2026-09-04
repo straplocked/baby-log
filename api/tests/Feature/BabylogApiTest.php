@@ -876,6 +876,42 @@ class BabylogApiTest extends TestCase
         $this->assertSame(2, User::count());
     }
 
+    public function test_state_reports_the_configured_limits(): void
+    {
+        config(['babylog.max_household_users' => 3, 'babylog.max_children' => 4]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $limits = $this->getJson('/api/state', $this->authed($ben))->json('limits');
+
+        // hand-written expectations matching the in-test config, not the defaults
+        $this->assertSame(['maxMembers' => 3, 'maxChildren' => 4], $limits);
+    }
+
+    public function test_a_removed_member_lands_in_former_members_with_their_name(): void
+    {
+        [$ben, , $doula] = $this->threeMemberHousehold();
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'd1', 'type' => 'bottle', 't' => 1000, 'detail' => '4'],
+        ]], $this->authed($doula))->assertOk();
+        $doulaId = $this->getJson('/api/state', $this->authed($doula))->json('user.id');
+
+        $this->postJson('/api/household/remove-member', ['user_id' => $doulaId], $this->authed($ben))->assertOk();
+
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        // gone from members, remembered in formerMembers — so their entries
+        // can still be attributed by name
+        $this->assertSame(['Ben', 'Katrina'], array_column($state['members'], 'name'));
+        $this->assertSame([['id' => $doulaId, 'name' => 'Robin']], $state['formerMembers']);
+        $this->assertSame($doulaId, $state['entries'][0]['user_id']);
+    }
+
+    public function test_former_members_is_empty_when_nobody_was_removed(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $this->assertSame([], $this->getJson('/api/state', $this->authed($ben))->json('formerMembers'));
+    }
+
     public function test_a_pending_invite_can_be_revoked(): void
     {
         $ben = $this->register('Ben', 'ben@example.com')->json('token');
