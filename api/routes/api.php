@@ -22,7 +22,10 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
 
     Route::get('/state', [SyncController::class, 'state']);
     Route::post('/baby', [SyncController::class, 'setBaby']);
+    Route::post('/children', [SyncController::class, 'setChild']);
     Route::post('/invite', [SyncController::class, 'invite']);
+    Route::post('/invite/revoke', [SyncController::class, 'revokeInvite']);
+    Route::post('/household/remove-member', [SyncController::class, 'removeMember']);
     Route::post('/settings', [SyncController::class, 'setSettings']);
     Route::post('/entries', [SyncController::class, 'pushEntries']);
 

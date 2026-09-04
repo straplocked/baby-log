@@ -753,4 +753,243 @@ class BabylogApiTest extends TestCase
         $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertStatus(422);
         $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'newpassword9'])->assertOk();
     }
+
+    // ── multi-member households (roles, members, invites) ─────────────────────
+
+    /** Ben (parent) + Katrina (parent) + Robin the doula (caregiver), one household. */
+    private function threeMemberHousehold(): array
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $codeKat = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $codeKat])->json('token');
+        $codeDoula = $this->postJson('/api/invite', ['email' => 'doula@example.com', 'role' => 'caregiver'], $this->authed($ben))->json('code');
+        $doula = $this->postJson('/api/register', ['name' => 'Robin', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $codeDoula])->json('token');
+
+        return [$ben, $kat, $doula];
+    }
+
+    public function test_state_lists_members_children_and_invites(): void
+    {
+        [$ben, $kat, $doula] = $this->threeMemberHousehold();
+        $this->postJson('/api/baby', ['name' => 'Maddux', 'birthdate' => '2026-07-20'], $this->authed($ben))->assertOk();
+        $wrenId = $this->postJson('/api/children', ['name' => 'Wren'], $this->authed($ben))->assertOk()->json('child.id');
+        $this->postJson('/api/invite', ['email' => 'granny@example.com', 'role' => 'caregiver'], $this->authed($ben))->assertOk();
+
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+
+        // every member, id-ordered, with their role — hand-written expectations
+        $this->assertSame(['Ben', 'Katrina', 'Robin'], array_column($state['members'], 'name'));
+        $this->assertSame(['parent', 'parent', 'caregiver'], array_column($state['members'], 'role'));
+        $this->assertSame('parent', $state['user']['role']);
+        $this->assertSame('caregiver', $this->getJson('/api/state', $this->authed($doula))->json('user.role'));
+
+        // all children ride along, primary first
+        $this->assertSame(['Maddux', 'Wren'], array_column($state['children'], 'name'));
+        $this->assertSame('2026-07-20', $state['children'][0]['birthdate']);
+        $this->assertFalse($state['children'][1]['archived']);
+        $this->assertSame($wrenId, $state['children'][1]['id']);
+
+        // pending invites carry their role
+        $this->assertSame([['email' => 'granny@example.com', 'role' => 'caregiver']], $state['invites']);
+
+        // legacy singular keys survive for installed PWAs: primary child + first other member
+        $this->assertSame('Maddux', $state['baby']['name']);
+        $this->assertSame('Katrina', $state['partner']['name']);
+        $this->assertSame('granny@example.com', $state['invitePending']);
+    }
+
+    public function test_a_caregiver_cannot_manage_the_household_but_can_log(): void
+    {
+        [, , $doula] = $this->threeMemberHousehold();
+
+        $this->postJson('/api/settings', ['unit' => 'ml'], $this->authed($doula))->assertStatus(403);
+        $this->postJson('/api/baby', ['name' => 'Hijack'], $this->authed($doula))->assertStatus(403);
+        $this->postJson('/api/children', ['name' => 'Hijack'], $this->authed($doula))->assertStatus(403);
+        $this->postJson('/api/invite/revoke', ['email' => 'katrina@example.com'], $this->authed($doula))->assertStatus(403);
+        $this->postJson('/api/household/remove-member', ['user_id' => 1], $this->authed($doula))->assertStatus(403);
+
+        // their actual job still works: logging entries and running timers
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'd1', 'type' => 'bottle', 't' => 1000, 'detail' => '4'],
+        ]], $this->authed($doula))->assertOk();
+        $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($doula))->assertOk();
+    }
+
+    public function test_removing_a_member_kills_their_session_but_keeps_their_entries(): void
+    {
+        [$ben, , $doula] = $this->threeMemberHousehold();
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'd1', 'type' => 'bottle', 't' => 1000, 'detail' => '4'],
+        ]], $this->authed($doula))->assertOk();
+        $doulaId = $this->getJson('/api/state', $this->authed($doula))->json('user.id');
+        $benId = $this->getJson('/api/state', $this->authed($ben))->json('user.id');
+
+        // you can't vote yourself off the island
+        $this->postJson('/api/household/remove-member', ['user_id' => $benId], $this->authed($ben))->assertStatus(422);
+
+        $this->postJson('/api/household/remove-member', ['user_id' => $doulaId], $this->authed($ben))->assertOk();
+
+        // the removed member's token is dead — the row itself is reaped, not
+        // just orphaned — and they're out of the member list
+        $this->getJson('/api/state', $this->authed($doula))->assertStatus(401);
+        $this->assertSame(0, PersonalAccessToken::where('tokenable_id', $doulaId)->count());
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertSame(['Ben', 'Katrina'], array_column($state['members'], 'name'));
+
+        // but the history still says who logged what
+        $this->assertSame($doulaId, $state['entries'][0]['user_id']);
+        $this->assertSame(2, User::count());
+    }
+
+    public function test_a_pending_invite_can_be_revoked(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+
+        $this->postJson('/api/invite/revoke', ['email' => 'Katrina@Example.com'], $this->authed($ben))->assertOk();
+
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertSame([], $state['invites']);
+        $this->assertNull($state['invitePending']);
+        // the revoked code opens no doors
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->assertStatus(422);
+        $this->assertSame(1, User::count());
+    }
+
+    // ── multiple children ─────────────────────────────────────────────────────
+
+    public function test_children_can_be_added_renamed_and_archived_up_to_the_cap(): void
+    {
+        config(['babylog.max_children' => 2]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+
+        $wrenId = $this->postJson('/api/children', ['name' => 'Wren', 'birthdate' => '2026-08-01'], $this->authed($ben))->assertOk()->json('child.id');
+
+        // two children tracked, the cap says no third
+        $this->postJson('/api/children', ['name' => 'Third'], $this->authed($ben))->assertStatus(422);
+
+        // rename + archive by id; omitted fields survive (same rule as /baby)
+        $this->postJson('/api/children', ['id' => $wrenId, 'name' => 'Wren B', 'archived' => true], $this->authed($ben))->assertOk();
+        $children = $this->getJson('/api/state', $this->authed($ben))->json('children');
+        $this->assertSame('Wren B', $children[1]['name']);
+        $this->assertSame('2026-08-01', $children[1]['birthdate']);
+        $this->assertTrue($children[1]['archived']);
+
+        // an id from another household is a 422, not a write
+        config(['babylog.open_registration' => true]);
+        $eve = $this->register('Eve', 'eve@example.com')->json('token');
+        $this->postJson('/api/children', ['id' => $wrenId, 'name' => 'Stolen'], $this->authed($eve))->assertStatus(422);
+        $this->assertSame('Wren B', $this->getJson('/api/state', $this->authed($ben))->json('children.1.name'));
+    }
+
+    public function test_entries_carry_a_baby_id_and_legacy_pushes_land_on_the_primary_child(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+        $wrenId = $this->postJson('/api/children', ['name' => 'Wren'], $this->authed($ben))->json('child.id');
+        $primaryId = $this->getJson('/api/state', $this->authed($ben))->json('children.0.id');
+
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e-wren', 'type' => 'bottle', 't' => 1000, 'detail' => '3', 'baby_id' => $wrenId],
+            ['id' => 'e-legacy', 'type' => 'bottle', 't' => 2000, 'detail' => '4'], // old client: no baby_id
+        ]], $this->authed($ben))->assertOk();
+
+        $entries = collect($this->getJson('/api/state?since=0', $this->authed($ben))->json('entries'))->keyBy('id');
+        $this->assertSame($wrenId, $entries['e-wren']['baby_id']);
+        $this->assertSame($primaryId, $entries['e-legacy']['baby_id']);
+    }
+
+    public function test_entry_update_without_a_baby_id_preserves_the_stored_one(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+        $wrenId = $this->postJson('/api/children', ['name' => 'Wren'], $this->authed($ben))->json('child.id');
+
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'detail' => '3', 'baby_id' => $wrenId],
+        ]], $this->authed($ben))->assertOk();
+
+        // an old client edits the amount, knowing nothing about children — the
+        // entry must not silently jump back to the primary child
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'detail' => '5'],
+        ]], $this->authed($ben))->assertOk();
+
+        $entry = $this->getJson('/api/state?since=0', $this->authed($ben))->json('entries.0');
+        $this->assertSame('5', $entry['detail']);
+        $this->assertSame($wrenId, $entry['baby_id']);
+    }
+
+    public function test_a_baby_id_from_another_household_is_never_stored(): void
+    {
+        config(['babylog.open_registration' => true]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $eve = $this->register('Eve', 'eve@example.com')->json('token');
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+        $this->postJson('/api/baby', ['name' => 'EveBaby'], $this->authed($eve))->assertOk();
+        $benBabyId = $this->getJson('/api/state', $this->authed($ben))->json('children.0.id');
+        $eveBabyId = $this->getJson('/api/state', $this->authed($eve))->json('children.0.id');
+        $this->assertNotSame($benBabyId, $eveBabyId);
+
+        // Ben pushes an entry pointed at Eve's child — the foreign id is
+        // dropped and the write behaves as if no baby_id was sent
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'baby_id' => $eveBabyId],
+        ]], $this->authed($ben))->assertOk();
+
+        $entry = $this->getJson('/api/state?since=0', $this->authed($ben))->json('entries.0');
+        $this->assertSame($benBabyId, $entry['baby_id']);
+    }
+
+    public function test_timer_carries_a_validated_baby_id(): void
+    {
+        config(['babylog.open_registration' => true]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $eve = $this->register('Eve', 'eve@example.com')->json('token');
+        $this->postJson('/api/baby', ['name' => 'Maddux'], $this->authed($ben))->assertOk();
+        $this->postJson('/api/baby', ['name' => 'EveBaby'], $this->authed($eve))->assertOk();
+        $wrenId = $this->postJson('/api/children', ['name' => 'Wren'], $this->authed($ben))->json('child.id');
+        $eveBabyId = $this->getJson('/api/state', $this->authed($eve))->json('children.0.id');
+
+        $this->postJson('/api/timer/start', ['type' => 'nurse', 'baby_id' => $wrenId], $this->authed($ben))->assertOk();
+        $this->assertSame($wrenId, $this->getJson('/api/state', $this->authed($ben))->json('timer.baby_id'));
+
+        // a foreign child id is dropped, not stored
+        $this->postJson('/api/timer/start', ['type' => 'nurse', 'baby_id' => $eveBabyId], $this->authed($ben))->assertOk();
+        $this->assertNull($this->getJson('/api/state', $this->authed($ben))->json('timer.baby_id'));
+    }
+
+    // ── shifts with three members ─────────────────────────────────────────────
+
+    public function test_handback_returns_duty_to_the_requester_not_the_first_member(): void
+    {
+        [$ben, $kat, $doula] = $this->threeMemberHousehold();
+        $katId = $this->getJson('/api/state', $this->authed($kat))->json('user.id');
+        $doulaId = $this->getJson('/api/state', $this->authed($doula))->json('user.id');
+
+        // Katrina (the SECOND member) asks for cover; the doula takes it
+        $this->postJson('/api/shifts/request', ['note' => 'dentist'], $this->authed($kat))->assertOk();
+        $this->postJson('/api/shifts/accept', ['plan' => [], 'until' => 'Until 3 PM'], $this->authed($doula))->assertOk();
+        $this->assertSame($doulaId, $this->getJson('/api/state', $this->authed($ben))->json('onDutyUserId'));
+
+        // handback must follow the stored requester (Katrina) — a "first other
+        // member" inference would wrongly crown Ben
+        $this->postJson('/api/shifts/handback', ['note' => 'all fed'], $this->authed($doula))->assertOk();
+        $this->assertSame($katId, $this->getJson('/api/state', $this->authed($ben))->json('onDutyUserId'));
+    }
+
+    public function test_you_cannot_accept_your_own_handoff_request(): void
+    {
+        [$ben] = $this->threeMemberHousehold();
+        $benId = $this->getJson('/api/state', $this->authed($ben))->json('user.id');
+
+        $this->postJson('/api/shifts/request', ['note' => 'so tired'], $this->authed($ben))->assertOk();
+        $this->postJson('/api/shifts/accept', ['plan' => []], $this->authed($ben))->assertStatus(422);
+
+        // the ask is still open for someone else, duty unmoved
+        $state = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertSame('requested', $state['shift']['state']);
+        $this->assertSame($benId, $state['onDutyUserId']);
+    }
 }
