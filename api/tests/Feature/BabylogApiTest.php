@@ -117,6 +117,39 @@ class BabylogApiTest extends TestCase
         $this->assertTrue((bool) $entries[0]['deleted']);
     }
 
+    public function test_undo_restores_a_deleted_entry_over_its_tombstone(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        // logged, then deleted — the tombstone reaches the server first
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'detail' => '4'],
+        ]], $this->authed($ben))->assertOk();
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'detail' => '4', 'deleted' => true],
+        ]], $this->authed($ben))->assertOk();
+        $tombRev = $this->getJson('/api/state?since=0', $this->authed($ben))->json('entries.0.rev');
+        $this->assertNotNull($tombRev);
+
+        // Undo pushes the same id restored, after the tombstone — the newer write must win
+        $this->postJson('/api/entries', ['entries' => [
+            ['id' => 'e1', 'type' => 'bottle', 't' => 1000, 'detail' => '4', 'deleted' => false],
+        ]], $this->authed($ben))->assertOk();
+
+        $entries = $this->getJson('/api/state?since=0', $this->authed($ben))->json('entries');
+        $this->assertCount(1, $entries);
+        $this->assertFalse((bool) $entries[0]['deleted']);
+        $this->assertSame('bottle', $entries[0]['type']);
+        $this->assertSame('4', $entries[0]['detail']);
+
+        // the restore must carry a strictly newer revision than its tombstone, so a
+        // partner who already pulled the delete (?since=<tombstone rev>) converges live
+        $this->assertGreaterThan($tombRev, $entries[0]['rev']);
+        $since = $this->getJson('/api/state?since='.$tombRev, $this->authed($ben))->json('entries');
+        $this->assertCount(1, $since);
+        $this->assertFalse((bool) $since[0]['deleted']);
+    }
+
     // ── baby ──────────────────────────────────────────────────────────────────
 
     public function test_baby_birthdate_round_trips_and_survives_omission(): void
