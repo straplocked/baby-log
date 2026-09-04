@@ -189,6 +189,30 @@ class PushNotificationsTest extends TestCase
         $this->assertCount(1, $this->push->to($katId));
     }
 
+    public function test_timer_push_names_the_child_only_with_multiple_children(): void
+    {
+        [$ben, $kat, , $katId] = $this->household();
+        $this->postJson('/api/baby', ['name' => 'Wren'], $this->authed($ben))->assertOk();
+
+        // one child: copy unchanged — nothing to disambiguate
+        $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($ben))->assertOk();
+        $this->assertSame('Ben started nursing', $this->push->to($katId)[0]['title']);
+
+        // a second child appears: an explicit baby_id is named…
+        $rileyId = $this->postJson('/api/children', ['name' => 'Riley'], $this->authed($ben))->assertOk()->json('child.id');
+        $this->postJson('/api/timer/start', ['type' => 'nurse', 'baby_id' => $rileyId], $this->authed($ben))->assertOk();
+        $this->assertSame('Ben started nursing for Riley', $this->push->to($katId)[1]['title']);
+
+        // …and an omitted baby_id names the primary child (old-client default)
+        $this->postJson('/api/timer/start', ['type' => 'pump'], $this->authed($ben))->assertOk();
+        $this->assertSame('Ben started pumping for Wren', $this->push->to($katId)[2]['title']);
+
+        // archiving back down to one visible child drops the name again
+        $this->postJson('/api/children', ['id' => $rileyId, 'name' => 'Riley', 'archived' => true], $this->authed($ben))->assertOk();
+        $this->postJson('/api/timer/start', ['type' => 'sleep'], $this->authed($ben))->assertOk();
+        $this->assertSame('Ben started a sleep timer', $this->push->to($katId)[3]['title']);
+    }
+
     // ── partner activity ──────────────────────────────────────────────────────
 
     public function test_partner_activity_is_opt_in_and_throttled(): void
