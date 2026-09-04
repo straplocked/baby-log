@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Community Apps template for the all-in-one Baby Log image
+  (deploy/aio/Dockerfile). One container: nginx serves the PWA on port 80 and
+  proxies /api (Laravel) and /app (Reverb websockets) to loopback; supervisord
+  runs the lot. All state lives in the /data volume (SQLite + a self-generated
+  .env) — the template carries NO secrets on purpose, the container generates
+  its own APP_KEY and Reverb credentials on first boot.
+
+  Submission steps + support-thread draft: docs/ca-submission.md
+-->
+<Container version="2">
+  <Name>baby-log</Name>
+  <Repository>ghcr.io/straplocked/baby-log-aio:latest</Repository>
+  <Registry>https://github.com/straplocked/baby-log/pkgs/container/baby-log-aio</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/straplocked/baby-log/issues</Support>
+  <Project>https://github.com/straplocked/baby-log</Project>
+  <ReadMe>https://github.com/straplocked/baby-log#readme</ReadMe>
+  <Overview>Baby tracker built for exactly two parents sharing one baby's log — your data stays in one SQLite file on your server.
+
+Three taps from pocket to logged: the entry sheet opens pre-stamped with the current time and a prediction of what you're about to log (alternating nursing sides, last bottle amount, feed-vs-diaper rhythm). Entries write locally first and sync when there's signal, so 3am logging never waits on the network.
+
+Both of you, one log: a partner joins by invite and sees the same log live over websockets. Shift handoffs are a first-class flow — "I need to sleep, take him" becomes a request with a note, an auto-drafted plan from the baby's rhythm, and a handback summary instead of a "when did you…" conversation.
+
+Installable PWA (Add to Home Screen), Now/History views with since-cards, totals, 7-day charts, sleep and nursing timers, and optional web-push reminders — no cloud account, no FCM, no telemetry.
+
+First boot generates all secrets into /data/.env automatically; the first account registered claims the instance and invites the second parent. Everything (database + secrets) lives in the one /data share — back that folder up and you've backed up the app.
+
+For access beyond your LAN (and for installing the PWA + push notifications, which need HTTPS), put a reverse proxy with websocket support in front — Nginx Proxy Manager or SWAG both work; enable websockets for the /app path.</Overview>
+  <Category>Tools:Utilities Productivity:</Category>
+  <WebUI>http://[IP]:[PORT:3500]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/ca-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/straplocked/baby-log/main/public/icons/icon-512.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Remote access needs an HTTPS reverse proxy with websocket support (the PWA install prompt and push notifications require HTTPS).</Requires>
+  <Config Name="WebUI Port" Target="80" Default="3500" Mode="tcp" Description="Host port for the web app. The container serves everything (app, API, websockets) on this one port." Type="Port" Display="always" Required="true" Mask="false">3500</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/baby-log" Mode="rw" Description="All state: the SQLite database and the auto-generated .env with this instance's secrets. Back this folder up." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/baby-log</Config>
+  <Config Name="APP_URL" Target="APP_URL" Default="" Mode="" Description="Optional: your public https origin (e.g. https://babylog.example.com) when running behind a reverse proxy. Used in invite/reset emails and as the web-push VAPID subject (required for iOS push)." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="REVERB_ALLOWED_ORIGINS" Target="REVERB_ALLOWED_ORIGINS" Default="" Mode="" Description="Optional: comma-separated hostnames allowed to open websockets (e.g. babylog.example.com). Leave empty to allow any origin." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

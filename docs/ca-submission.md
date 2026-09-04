@@ -1,0 +1,126 @@
+# Submitting Baby Log to Unraid Community Apps
+
+The template is [deploy/unraid/ca-template.xml](../deploy/unraid/ca-template.xml). It consumes the
+all-in-one image `ghcr.io/straplocked/baby-log-aio:latest` (built by
+[.github/workflows/release.yml](../.github/workflows/release.yml) on `v*` tag pushes — a `main` push
+does **not** build the AIO image, so a tagged release must exist before the template is useful).
+
+## Pre-submission checklist
+
+1. **Publish the image.** Push the `v1.0.0` tag; `release.yml` runs the suite, then pushes
+   `baby-log-aio:v1.0.0` and `:latest` to GHCR.
+2. **Make the GHCR package public.** GitHub → your profile → Packages → `baby-log-aio` →
+   Package settings → Danger Zone → Change visibility → Public. CA users' servers pull
+   anonymously; a private package fails with a misleading "manifest not found". Do the same for
+   `baby-log-app` / `baby-log-api` if they aren't already public.
+3. **Test the template on a real Unraid box.** Copy `ca-template.xml` to
+   `/boot/config/plugins/dockerMan/templates-user/` on the flash share (any filename ending
+   `.xml`), then Docker tab → **Add Container** → pick it from the Template dropdown. Verify:
+   - the container starts and first boot logs `first boot: generating secrets into /data/.env`;
+   - the **WebUI** button opens `http://<server-ip>:3500` and the app loads;
+   - registering the first account claims the instance;
+   - `/mnt/user/appdata/baby-log` contains `database.sqlite` + `.env` afterwards;
+   - stop/start survives (secrets reused, no re-generation).
+4. **Confirm the raw URLs resolve** (they 404 until this branch is on `main`):
+   - `https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/ca-template.xml`
+   - `https://raw.githubusercontent.com/straplocked/baby-log/main/public/icons/icon-512.png`
+5. **Create the support thread** on the Unraid forums (draft below) so the listing has a
+   human-facing support venue alongside the GitHub issues link in `<Support>`.
+
+## Where the template lives
+
+CA ingests templates from a GitHub repository registered in its application feed. Two options:
+
+- **In-repo (current setup):** register `https://github.com/straplocked/baby-log` as the template
+  repository. CA scans the repo for `<Container>` XMLs and will find
+  `deploy/unraid/ca-template.xml`; `<TemplateURL>` already points at its raw `main` URL, so edits
+  land by pushing to `main`.
+- **Dedicated template repo:** if the moderators prefer a templates-only repo (some do — it keeps
+  their scanner away from unrelated XML), create `straplocked/unraid-templates`, copy the file in,
+  and update `<TemplateURL>` to the new raw URL. Keep the copy in sync from this repo (a one-line
+  step in the release checklist, or a small workflow later).
+
+Start with the in-repo path; switch only if review feedback asks for it.
+
+## Submission flow
+
+1. Sign in at **https://ca.unraid.net** with your Unraid forum account and register as an
+   application author.
+2. Add the template repository URL (whichever option above you chose) and fill in the profile
+   fields (support thread URL, donate link if any).
+3. Wait for moderation. Moderators check that the image is public, the template parses, the icon
+   loads, and the Overview isn't spam. Respond to feedback in the submission thread.
+4. After approval the appfeed picks the template up on its next scan (a couple of hours). Search
+   "Baby Log" in CA on a test server to confirm.
+5. **Ongoing:** template fixes are just pushes to `main` (the feed re-scans). App updates ship by
+   tagging releases — `release.yml` owns `:latest`, so CA's "update available" tracking works
+   without touching the template.
+
+If any of the portal details have drifted (the CA account flow has moved before), the canonical
+instructions are pinned in the Community Applications section of the Unraid forums — follow those
+over this doc and update this doc after.
+
+## Remote access requirement (say it everywhere)
+
+On the LAN the container works over plain HTTP. For anything more, users need an **HTTPS reverse
+proxy with websocket support** (Nginx Proxy Manager, SWAG, Caddy) pointing at the container's
+mapped port, because:
+
+- the PWA install prompt and web-push notifications only exist on HTTPS origins;
+- realtime sync is a websocket at `/app` — without proxied websockets the app silently degrades to
+  60-second polling;
+- `APP_URL` should then be set to the public origin (template's advanced variable) so emails and
+  the push VAPID subject are correct.
+
+This is stated in the template's `<Requires>` and Overview, and belongs in the support thread's
+opening post too (below).
+
+## Support thread draft
+
+**Forum:** Unraid forums → Docker Containers support subforum (create it before submitting so the
+URL exists).
+
+**Title:**
+
+> [Support] Baby Log — self-hosted baby tracker for two parents (offline PWA, realtime sync, shift handoffs)
+
+**Body:**
+
+> This is the support thread for the **Baby Log** Community Apps template.
+>
+> Baby Log is a baby tracker built for exactly two parents sharing one baby's log, running
+> entirely on your server — one container, one SQLite file, no cloud account, no telemetry.
+>
+> **What it does**
+> - **Three taps from pocket to logged.** The entry sheet opens pre-stamped with the current time
+>   and a prediction of what you're about to log (alternating nursing sides, last bottle amount,
+>   feed-vs-diaper rhythm). Overriding the guess costs one tap.
+> - **Both of you, one log.** The second parent joins by invite and sees the same log live over
+>   websockets. Entries write locally first and sync when there's signal — 3am logging never waits
+>   on the network.
+> - **Shift handoffs.** "I need to sleep, take him" is a first-class flow: request with a note,
+>   accept with an auto-drafted plan from the baby's rhythm, hand back with a summary.
+> - Installable PWA, Now/History views, 7-day charts, sleep/nursing/pump timers, CSV export for
+>   the pediatrician, optional web-push reminders (self-hosted VAPID — no FCM).
+>
+> **Install notes**
+> - First boot generates all secrets into `/data/.env` — there is nothing to configure to try it
+>   on the LAN. The first account registered claims the instance; registration is invite-only
+>   after that.
+> - Everything lives in the one appdata share (`database.sqlite` + `.env`). Back that folder up
+>   and you've backed up the app. Losing the `.env` strands encrypted data — don't delete it.
+> - **Remote access / phones outside the LAN:** put an HTTPS reverse proxy with **websocket
+>   support** in front (NPM, SWAG, Caddy). HTTPS is required for the PWA install prompt and push
+>   notifications; without proxied websockets, live sync falls back to 60-second polling. Set the
+>   `APP_URL` variable (Advanced view) to your public origin.
+> - Invite emails need SMTP (`MAIL_*` appended to `/data/.env`); without it the app shows a
+>   shareable invite code instead, so email is optional.
+>
+> **Honest scope:** it's built for two adults and one baby per instance — no multi-baby support,
+> no custom entry types, and the stats window is 7 days (with day-by-day drill-down). If you need
+> a many-user, many-child tracker, Baby Buddy may fit better; this one optimizes for offline
+> logging, live partner sync, and the two-parent handoff. (Switching over? Settings can import a
+> Baby Buddy CSV export.)
+>
+> Source (AGPL): https://github.com/straplocked/baby-log — bugs are best as GitHub issues, but
+> this thread works too.
