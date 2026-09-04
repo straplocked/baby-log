@@ -60,8 +60,11 @@ HTTPS origin the app already needs.
   `schedule:work` process the api container starts next to `artisan serve`:
   feed gap (learned cluster-aware rhythm or a fixed interval, optionally only
   while on duty), wake window (age-typical max from the baby's birth date),
-  and a daily meds nudge. Each fires at most once per triggering feed / nap /
-  day — the dedupe lives in `users.notify_state`, so restarts can't
+  a daily meds nudge, and the shift "until" ping (an active shift's
+  client-resolved `until_at` passes → both parents get one ping; nothing about
+  duty changes by itself). Each fires at most once per triggering feed / nap /
+  day / shift — the dedupe lives in `users.notify_state` (and
+  `shifts.until_notified_at` for the until ping), so restarts can't
   double-ping.
 - **Delivery is best-effort** like the Reverb pokes ([app/Services/PushService.php](../api/app/Services/PushService.php)):
   a dead push service never fails a write or a scheduler tick. Pushes carry

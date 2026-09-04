@@ -730,6 +730,18 @@ export default class App extends React.Component {
     if (this.trackOn('meds') && meds.getTime() - now < 11 * 3600000) out.push({ id: 'p3', type: 'meds', at: meds.getTime() })
     return out
   }
+  // "Until 6 AM" → the next matching clock time as ms epoch, resolved here in
+  // the accepter's own timezone; wake-dependent / open-ended labels have no
+  // alarm time, so they return null and the server's until-ping never fires
+  untilAt(label) {
+    const m = /until\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(label || '')
+    if (!m) return null
+    let h = Number(m[1])
+    if (m[3]) h = h % 12 + (m[3].toLowerCase() === 'pm' ? 12 : 0)
+    const d = new Date(); d.setHours(h, Number(m[2] || 0), 0, 0)
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1)
+    return d.getTime()
+  }
   lastOf(keys) { return this.live().filter(e => keys.includes(e.type)).sort((a, b) => b.t - a.t)[0] }
 
   // ── nursing / pump / sleep timers (server-backed, live) ────────────────────
@@ -842,14 +854,15 @@ export default class App extends React.Component {
     const s = this.state
     const plan = (s.planDraft || this.draftPlan()).filter(p => !s.planOff.includes(p.id))
     const until = s.until
+    const untilAt = this.untilAt(until)
     this.closeShift()
     this.setState(st => ({
       shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
       onDutyUserId: st.me?.id ?? st.onDutyUserId,
-      serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, started_at: Date.now() },
+      serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, until_at: untilAt, started_at: Date.now() },
       toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', undoAction: null,
     }), () => this.bumpToast())
-    api.shiftAccept(plan, until).then(r => this.setState({ serverShift: r.shift })).catch(this.shiftFail)
+    api.shiftAccept(plan, until, untilAt).then(r => this.setState({ serverShift: r.shift })).catch(this.shiftFail)
   }
   addPlanFeed = () => this.setState(s => {
     const last = s.plan.filter(p => FEEDS.includes(p.type)).sort((a, b) => b.at - a.at)[0]
@@ -1386,13 +1399,17 @@ export default class App extends React.Component {
 
     // shift window + plan progress
     const activeMine = sh && sh.state === 'active' && me && sh.user_id === me.id
+    const activeTheirs = !!(partner && sh && sh.state === 'active' && sh.user_id === partner.id)
     const completed = sh && sh.state === 'completed'
     const incomingReq = !!(partner && sh && sh.state === 'requested' && sh.requester_id === partner.id)
-    const shiftStart = (activeMine || completed ? sh.started_at : null) || Date.now()
+    const shiftStart = (activeMine || activeTheirs || completed ? sh.started_at : null) || Date.now()
     const shiftEnd = completed ? sh.ended_at : null
     const shiftEntries = live.filter(e => e.t >= shiftStart && (!shiftEnd || e.t <= shiftEnd)).sort((a, b) => a.t - b.t)
     const matched = new Set()
-    const plan = [...s.plan].sort((a, b) => a.at - b.at).map(p => {
+    // my plan lives in s.plan (editable, pushed via /shifts/plan); the partner's
+    // is read straight off the synced server shift — same rows, just read-only,
+    // and every poke-to-pull refresh moves the done states along
+    const plan = [...(activeTheirs ? sh.plan || [] : s.plan)].sort((a, b) => a.at - b.at).map(p => {
       const keys = FEEDS.includes(p.type) ? FEEDS : [p.type]
       const hit = shiftEntries.find(e => keys.includes(e.type) && !matched.has(e.id))
       if (hit) matched.add(hit.id)
@@ -1415,11 +1432,14 @@ export default class App extends React.Component {
       }
     })
     const nextRow = planRows.find(r => r.stateIcon === 'schedule')
-    const draft = s.planDraft || []
     const fmtPlanLabel = p => (p.type === 'bottle' ? 'Feed' : T(p.type).label)
     const rhythm = this.draftPlan()
-    const requestPlan = rhythm.slice(0, 2).map(p => ({ icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p) + ' ~' + this.clock(p.at) }))
-    const requestPlanRows = draft.map(p => {
+    // one source for the incoming card's predicted chips and the accept sheet's
+    // toggle rows — the card must preview exactly the plan the sheet opens with
+    // (and acceptShift submits): the seeded draft when one exists, else the rhythm
+    const draftSrc = s.planDraft || rhythm
+    const requestPlan = draftSrc.filter(p => !s.planOff.includes(p.id)).map(p => ({ icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p) + ' ~' + this.clock(p.at) }))
+    const requestPlanRows = draftSrc.map(p => {
       const off = s.planOff.includes(p.id)
       return { icon: T(p.type).icon, color: T(p.type).color, label: fmtPlanLabel(p), time: '~' + this.clock(p.at),
         toggleIcon: off ? 'toggle_off' : 'toggle_on', toggleColor: off ? 'var(--dim)' : 'var(--accent)',
@@ -1550,6 +1570,8 @@ export default class App extends React.Component {
       partnerInitial: initial(partner?.name), myInitial: initial(me?.name),
       incoming: incomingReq && s.screen === 'home',
       mine: iAmOnDuty && !!partner && activeMine,
+      theirs: activeTheirs && !iAmOnDuty,
+      theirShiftSub: activeTheirs ? 'since ' + this.clock(shiftStart) + (sh.until ? ' · ' + sh.until.charAt(0).toLowerCase() + sh.until.slice(1) : '') : '',
       dutyInitial: iAmOnDuty ? initial(me?.name) : initial(partner?.name),
       dutyColor: iAmOnDuty ? ME_COLOR : PARTNER_COLOR,
       dutyLabel: partner ? (iAmOnDuty ? 'You · on duty' : partnerName + ' · on duty') : 'Just you so far',
@@ -1980,6 +2002,37 @@ export default class App extends React.Component {
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#5F6E42")}>Hand back</div>
                       <Sym style={{ fontSize: 17, color: 'var(--accent-text)' }}>arrow_forward</Sym>
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {v.theirs && (
+                <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px 8px;margin-bottom:12px;display:flex;flex-direction:column;gap:4px')}>
+                  <div style={S('display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:6px')}>
+                    <div style={S('display:flex;align-items:center;gap:9px')}>
+                      <div style={S(`width:28px;height:28px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
+                      <div style={S('display:flex;flex-direction:column')}>
+                        <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.partnerName}’s shift</div>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.theirShiftSub}</div>
+                      </div>
+                    </div>
+                    {v.plan.length > 0 && (
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:var(--accent-deep);background:rgba(var(--accent-rgb),0.14);border-radius:999px;padding:5px 11px")}>{v.nextUp}</div>
+                    )}
+                  </div>
+                  {v.plan.map((p, i) => (
+                    <div key={i} style={S('display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid rgba(38,35,29,0.06)')}>
+                      <Sym style={{ fontSize: 21, color: p.stateColor }}>{p.stateIcon}</Sym>
+                      <Sym style={{ fontSize: 18, color: p.color }}>{p.icon}</Sym>
+                      <div style={S('flex:1;display:flex;flex-direction:column;gap:1px')}>
+                        <div style={S(`font-size:14.5px;font-weight:600;color:${p.textColor}`)}>{p.label}</div>
+                        <div style={S('font-size:12px;color:#8C8474')}>{p.sub}</div>
+                      </div>
+                      <div style={S(`font-family:'Nunito',sans-serif;font-weight:600;font-size:13px;color:${p.whenColor}`)}>{p.when}</div>
+                    </div>
+                  ))}
+                  <div style={S('display:flex;align-items:center;justify-content:center;padding:8px 0 4px;border-top:1px solid rgba(38,35,29,0.06)')}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.plan.length ? 'Their plan, live from the log — no need to ask' : 'No plan set — the log below updates live'}</div>
                   </div>
                 </div>
               )}

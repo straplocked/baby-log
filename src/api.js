@@ -48,7 +48,7 @@ export const api = {
   timerStart: type => call('/timer/start', { method: 'POST', body: { type } }),
   timerStop: () => call('/timer/stop', { method: 'POST' }),
   shiftRequest: note => call('/shifts/request', { method: 'POST', body: { note } }),
-  shiftAccept: (plan, until) => call('/shifts/accept', { method: 'POST', body: { plan, until } }),
+  shiftAccept: (plan, until, untilAt) => call('/shifts/accept', { method: 'POST', body: { plan, until, until_at: untilAt } }), // until_at: ms epoch or null
   shiftPlan: plan => call('/shifts/plan', { method: 'POST', body: { plan } }),
   shiftHandback: note => call('/shifts/handback', { method: 'POST', body: { note } }),
 }

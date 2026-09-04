@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Shift;
 use App\Models\User;
 use App\Services\PushService;
 use Illuminate\Console\Command;
@@ -28,6 +29,8 @@ class SendReminders extends Command
 
     public function handle(PushService $push): void
     {
+        $this->untilReminder($push);
+
         $users = User::whereHas('pushSubscriptions')->with(['household.baby'])->get();
         foreach ($users as $user) {
             if (! $user->household) {
@@ -43,6 +46,52 @@ class SendReminders extends Command
             $dirty = $this->medsReminder($push, $user, $p, $state) || $dirty;
             if ($dirty) {
                 $user->update(['notify_state' => $state]);
+            }
+        }
+    }
+
+    /**
+     * An active shift's clock-time "until" has passed: ping the shift-holder
+     * ("hand back?") and the partner (their counterpart), once, and change
+     * nothing — duty only ever moves through an explicit handback. The marker
+     * lives on the shift row (until_notified_at), so the every-minute schedule
+     * can't re-fire it; it is stamped before pushing so a transport hiccup
+     * degrades to a missed ping, never a nightly spam loop.
+     */
+    private function untilReminder(PushService $push): void
+    {
+        $now = now()->getTimestampMs();
+        $due = Shift::where('state', 'active')
+            ->whereNotNull('until_at')
+            ->where('until_at', '<=', $now)
+            ->whereNull('until_notified_at')
+            ->with(['household.users', 'household.baby'])
+            ->get();
+        foreach ($due as $shift) {
+            $shift->update(['until_notified_at' => $now]);
+            $household = $shift->household;
+            $holder = $household?->users->firstWhere('id', $shift->user_id);
+            if (! $holder) {
+                continue;
+            }
+            $partner = $household->partnerOf($holder);
+            $baby = $household->baby?->name ?? 'the baby';
+            $said = $shift->until ? lcfirst($shift->until) : 'until about now';
+            if ($holder->notifyPrefs()['handoff'] && ! $holder->inQuietHours()) {
+                $push->notify(
+                    $holder,
+                    'shift',
+                    'Shift over — hand back?',
+                    'You said '.$said.' — nothing changes until you hand '.$baby.' back.',
+                );
+            }
+            if ($partner && $partner->notifyPrefs()['handoff'] && ! $partner->inQuietHours()) {
+                $push->notify(
+                    $partner,
+                    'shift',
+                    $holder->name.'’s shift is up',
+                    'They said '.$said.' — ready to take '.$baby.' back?',
+                );
             }
         }
     }
