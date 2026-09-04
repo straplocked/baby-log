@@ -12,13 +12,21 @@ use Illuminate\Http\Request;
 class ShiftController extends Controller
 {
     /**
-     * Handoff pushes deliberately ignore quiet hours — this is one parent
-     * addressing the other directly, not the app nagging.
+     * Handoff pushes deliberately ignore quiet hours — this is one grown-up
+     * addressing another directly, not the app nagging.
      */
     private function pushHandoff(?User $to, string $title, string $body): void
     {
         if ($to && $to->notifyPrefs()['handoff']) {
             app(PushService::class)->notify($to, 'shift', $title, $body);
+        }
+    }
+
+    /** Same handoff push, fanned out to a set of members. */
+    private function pushHandoffToAll(iterable $users, string $title, string $body): void
+    {
+        foreach ($users as $to) {
+            $this->pushHandoff($to, $title, $body);
         }
     }
 
@@ -60,8 +68,9 @@ class ShiftController extends Controller
         } else {
             $household->shifts()->create(['state' => 'requested', ...$values]);
         }
-        $this->pushHandoff(
-            $household->partnerOf($request->user()),
+        // anyone in the household can answer the ask, so everyone hears it
+        $this->pushHandoffToAll(
+            $household->othersFor($request->user()),
             $request->user()->name.' is asking you to take over',
             ($data['note'] ?? null) ?: 'Open Baby Log to see the handoff.',
         );
@@ -85,8 +94,13 @@ class ShiftController extends Controller
         $user = $request->user();
         $household = $user->household;
 
-        $shift = $household->shifts()->where('state', 'requested')->latest('id')->first()
-            ?? $household->shifts()->make(['requested_at' => null]);
+        $shift = $household->shifts()->where('state', 'requested')->latest('id')->first();
+        // any member except the asker may answer — accepting your own ask
+        // would just quietly re-crown you
+        if ($shift && $shift->requester_id === $user->id) {
+            return response()->json(['message' => 'You asked for this handoff — someone else has to take it.'], 422);
+        }
+        $shift ??= $household->shifts()->make(['requested_at' => null]);
 
         $shift->fill([
             'household_id' => $household->id,
@@ -103,11 +117,17 @@ class ShiftController extends Controller
 
         HouseholdTouched::send($household->id, 'shift');
         $until = ($data['until'] ?? null) ?: null;
-        $this->pushHandoff(
-            $household->partnerOf($user),
-            $user->name.' took over — you’re covered',
-            $until ? 'On duty '.lcfirst($until).'.' : 'Get some rest.',
-        );
+        $requester = $shift->requester_id ? $household->users->firstWhere('id', $shift->requester_id) : null;
+        foreach ($household->othersFor($user) as $other) {
+            // the one who asked hears "you're covered"; the rest just learn who's on
+            $this->pushHandoff(
+                $other,
+                $other->id === $requester?->id
+                    ? $user->name.' took over — you’re covered'
+                    : $user->name.' is on duty now',
+                $until ? 'On duty '.lcfirst($until).'.' : ($other->id === $requester?->id ? 'Get some rest.' : 'Duty just changed hands.'),
+            );
+        }
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }
@@ -126,14 +146,13 @@ class ShiftController extends Controller
         return response()->json(['ok' => true]);
     }
 
-    /** End my shift and put the partner back on duty, with a note + report window. */
+    /** End my shift and hand duty back to whoever asked for the cover, with a note + report window. */
     public function handback(Request $request): JsonResponse
     {
         $data = $request->validate(['note' => ['nullable', 'string', 'max:500']]);
 
         $user = $request->user();
         $household = $user->household;
-        $partner = $household->partnerOf($user);
 
         $shift = $household->shifts()->where('state', 'active')->where('user_id', $user->id)->latest('id')->first();
         if ($shift) {
@@ -144,17 +163,27 @@ class ShiftController extends Controller
             ]);
         }
         // duty is moving anyway — a still-pending "take over?" ask would only
-        // leave the partner a stale incoming card
+        // leave someone a stale incoming card
         $household->shifts()->where('state', 'requested')->update(['state' => 'cancelled']);
 
-        $household->update(['on_duty_user_id' => $partner?->id ?? $user->id]);
+        // duty returns to the shift's stored requester; a self-started shift
+        // (or a requester who has since been removed) falls back to the first
+        // other member — the old two-parent behavior — then to yourself
+        $requester = $shift?->requester_id ? $household->users->firstWhere('id', $shift->requester_id) : null;
+        $to = ($requester && $requester->id !== $user->id ? $requester : null)
+            ?? $household->partnerOf($user)
+            ?? $user;
+
+        $household->update(['on_duty_user_id' => $to->id]);
 
         HouseholdTouched::send($household->id, 'shift');
-        $this->pushHandoff(
-            $partner,
-            $user->name.' handed '.($household->baby?->name ?? 'the baby').' back',
-            ($data['note'] ?? null) ?: 'Their shift report is waiting in the app.',
-        );
+        if ($to->id !== $user->id) {
+            $this->pushHandoff(
+                $to,
+                $user->name.' handed '.($household->baby?->name ?? 'the baby').' back',
+                ($data['note'] ?? null) ?: 'Their shift report is waiting in the app.',
+            );
+        }
 
         return response()->json(['ok' => true, 'shift' => $shift]);
     }

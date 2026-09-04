@@ -2,10 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Household;
 use App\Models\Shift;
 use App\Models\User;
 use App\Services\PushService;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Runs every minute via the scheduler. Each reminder kind fires at most once
@@ -31,7 +33,7 @@ class SendReminders extends Command
     {
         $this->untilReminder($push);
 
-        $users = User::whereHas('pushSubscriptions')->with(['household.baby'])->get();
+        $users = User::whereHas('pushSubscriptions')->with(['household.children'])->get();
         foreach ($users as $user) {
             if (! $user->household) {
                 continue;
@@ -52,11 +54,14 @@ class SendReminders extends Command
 
     /**
      * An active shift's clock-time "until" has passed: ping the shift-holder
-     * ("hand back?") and the partner (their counterpart), once, and change
-     * nothing — duty only ever moves through an explicit handback. The marker
-     * lives on the shift row (until_notified_at), so the every-minute schedule
-     * can't re-fire it; it is stamped before pushing so a transport hiccup
-     * degrades to a missed ping, never a nightly spam loop.
+     * ("hand back?") and their counterpart — the member who asked for the
+     * cover (a self-started shift falls back to the first other member) —
+     * once, and change nothing: duty only ever moves through an explicit
+     * handback. The rest of the household isn't part of this exchange and
+     * stays unpinged. The marker lives on the shift row (until_notified_at),
+     * so the every-minute schedule can't re-fire it; it is stamped before
+     * pushing so a transport hiccup degrades to a missed ping, never a
+     * nightly spam loop.
      */
     private function untilReminder(PushService $push): void
     {
@@ -65,7 +70,7 @@ class SendReminders extends Command
             ->whereNotNull('until_at')
             ->where('until_at', '<=', $now)
             ->whereNull('until_notified_at')
-            ->with(['household.users', 'household.baby'])
+            ->with(['household.users', 'household.children'])
             ->get();
         foreach ($due as $shift) {
             $shift->update(['until_notified_at' => $now]);
@@ -74,8 +79,10 @@ class SendReminders extends Command
             if (! $holder) {
                 continue;
             }
-            $partner = $household->partnerOf($holder);
-            $baby = $household->baby?->name ?? 'the baby';
+            $requester = $shift->requester_id ? $household->users->firstWhere('id', $shift->requester_id) : null;
+            $counterpart = ($requester && $requester->id !== $holder->id ? $requester : null)
+                ?? $household->partnerOf($holder);
+            $baby = $household->children->first()?->name ?? 'the baby';
             $said = $shift->until ? lcfirst($shift->until) : 'until about now';
             if ($holder->notifyPrefs()['handoff'] && ! $holder->inQuietHours()) {
                 $push->notify(
@@ -85,9 +92,9 @@ class SendReminders extends Command
                     'You said '.$said.' — nothing changes until you hand '.$baby.' back.',
                 );
             }
-            if ($partner && $partner->notifyPrefs()['handoff'] && ! $partner->inQuietHours()) {
+            if ($counterpart && $counterpart->notifyPrefs()['handoff'] && ! $counterpart->inQuietHours()) {
                 $push->notify(
-                    $partner,
+                    $counterpart,
                     'shift',
                     $holder->name.'’s shift is up',
                     'They said '.$said.' — ready to take '.$baby.' back?',
@@ -106,34 +113,45 @@ class SendReminders extends Command
             return false;
         }
         $now = now()->getTimestampMs();
-        $ts = $hh->entries()
-            ->whereIn('type', ['bottle', 'nurse'])->where('deleted', false)
-            ->where('t', '>', $now - 48 * 3600000)->where('t', '<=', $now)
-            ->orderBy('t')->pluck('t')->all();
-        if (! $ts) {
-            return false;
+        $primaryId = $hh->children->first()?->id;
+        $dirty = false;
+        // every child keeps its own feed rhythm — twins don't share a stomach
+        foreach ($hh->children->where('archived', false) as $child) {
+            $ts = $this->childEntries($hh, $child->id, $primaryId)
+                ->whereIn('type', ['bottle', 'nurse'])->where('deleted', false)
+                ->where('t', '>', $now - 48 * 3600000)->where('t', '<=', $now)
+                ->orderBy('t')->pluck('t')->all();
+            if (! $ts) {
+                continue;
+            }
+            $starts = $this->sessionStarts($ts);
+            $lastStart = end($starts);
+            $gap = $p['feedEvery'] ? $p['feedEvery'] * 60000 : $this->rhythmGap($starts);
+            if ($now < $lastStart + $gap) {
+                continue;
+            }
+            if ($now - $lastStart > 12 * 3600000) {
+                continue; // log has gone quiet — a reminder now would just be noise
+            }
+            // per-child marker (the bare pre-multi-child key covers the primary
+            // child across the upgrade, so nobody gets re-nudged mid-feed)
+            $key = 'feedFor_'.$child->id;
+            $already = ($state[$key] ?? null) === $lastStart
+                || ($child->id === $primaryId && ($state['feedFor'] ?? null) === $lastStart);
+            if ($already) {
+                continue;
+            }
+            $state[$key] = $lastStart;
+            $push->notify(
+                $user,
+                'feed',
+                ($child->name ?? 'The baby').' is probably getting hungry',
+                'Last fed '.$this->dur($now - end($ts)).' ago — usually every ~'.$this->dur($gap).'.',
+            );
+            $dirty = true;
         }
-        $starts = $this->sessionStarts($ts);
-        $lastStart = end($starts);
-        $gap = $p['feedEvery'] ? $p['feedEvery'] * 60000 : $this->rhythmGap($starts);
-        if ($now < $lastStart + $gap) {
-            return false;
-        }
-        if ($now - $lastStart > 12 * 3600000) {
-            return false; // log has gone quiet — a reminder now would just be noise
-        }
-        if (($state['feedFor'] ?? null) === $lastStart) {
-            return false; // already nudged about this feed
-        }
-        $state['feedFor'] = $lastStart;
-        $push->notify(
-            $user,
-            'feed',
-            ($hh->baby?->name ?? 'The baby').' is probably getting hungry',
-            'Last fed '.$this->dur($now - end($ts)).' ago — usually every ~'.$this->dur($gap).'.',
-        );
 
-        return true;
+        return $dirty;
     }
 
     private function wakeReminder(PushService $push, User $user, array $p, array &$state): bool
@@ -142,35 +160,47 @@ class SendReminders extends Command
             return false;
         }
         $hh = $user->household;
-        if (($hh->settings['tracking']['sleep'] ?? true) === false || ! $hh->baby?->birthdate) {
+        if (($hh->settings['tracking']['sleep'] ?? true) === false) {
             return false;
         }
         $now = now()->getTimestampMs();
-        // sleep entries are stamped at the nap's end, so t is when the wake window opened
-        $last = $hh->entries()->where('type', 'sleep')->where('deleted', false)
-            ->where('t', '<=', $now)->orderByDesc('t')->first();
-        if (! $last) {
-            return false;
+        $primaryId = $hh->children->first()?->id;
+        $dirty = false;
+        foreach ($hh->children->where('archived', false) as $child) {
+            if (! $child->birthdate) {
+                continue; // the window is age-typical — no birthdate, no window
+            }
+            // sleep entries are stamped at the nap's end, so t is when the wake window opened
+            $last = $this->childEntries($hh, $child->id, $primaryId)
+                ->where('type', 'sleep')->where('deleted', false)
+                ->where('t', '<=', $now)->orderByDesc('t')->first();
+            if (! $last) {
+                continue;
+            }
+            $awake = $now - $last->t;
+            $weeks = (int) floor(max(0, $now - strtotime($child->birthdate.'T00:00:00') * 1000) / (7 * 86400000));
+            $maxWake = $this->maxWakeMins($weeks) * 60000;
+            // past 8h it's overnight or unlogged sleep, not a stretched wake window
+            if ($awake < $maxWake || $awake > 8 * 3600000) {
+                continue;
+            }
+            $key = 'wakeFor_'.$child->id;
+            $already = ($state[$key] ?? null) === $last->t
+                || ($child->id === $primaryId && ($state['wakeFor'] ?? null) === $last->t);
+            if ($already) {
+                continue;
+            }
+            $state[$key] = $last->t;
+            $push->notify(
+                $user,
+                'wake',
+                ($child->name ?? 'The baby').' has been awake a while',
+                'About '.$this->dur($awake).' since the last logged nap — typical max for their age is '.$this->dur($maxWake).'.',
+            );
+            $dirty = true;
         }
-        $awake = $now - $last->t;
-        $weeks = (int) floor(max(0, $now - strtotime($hh->baby->birthdate.'T00:00:00') * 1000) / (7 * 86400000));
-        $maxWake = $this->maxWakeMins($weeks) * 60000;
-        // past 8h it's overnight or unlogged sleep, not a stretched wake window
-        if ($awake < $maxWake || $awake > 8 * 3600000) {
-            return false;
-        }
-        if (($state['wakeFor'] ?? null) === $last->t) {
-            return false;
-        }
-        $state['wakeFor'] = $last->t;
-        $push->notify(
-            $user,
-            'wake',
-            ($hh->baby->name ?? 'The baby').' has been awake a while',
-            'About '.$this->dur($awake).' since the last logged nap — typical max for their age is '.$this->dur($maxWake).'.',
-        );
 
-        return true;
+        return $dirty;
     }
 
     private function medsReminder(PushService $push, User $user, array $p, array &$state): bool
@@ -199,10 +229,21 @@ class SendReminders extends Command
         $given = $hh->entries()->where('type', 'meds')->where('deleted', false)
             ->where('t', '>=', $local->copy()->startOfDay()->getTimestampMs())->exists();
         if (! $given) {
-            $push->notify($user, 'meds', 'Meds time', 'Nothing logged for '.($hh->baby?->name ?? 'the baby').' yet today.');
+            $push->notify($user, 'meds', 'Meds time', 'Nothing logged for '.($hh->children->first()?->name ?? 'the baby').' yet today.');
         }
 
         return true;
+    }
+
+    /** Entries for one child; pre-multi-child rows (NULL baby_id) belong to the primary child. */
+    private function childEntries(Household $hh, int $childId, ?int $primaryId): HasMany
+    {
+        return $hh->entries()->where(function ($q) use ($childId, $primaryId) {
+            $q->where('baby_id', $childId);
+            if ($childId === $primaryId) {
+                $q->orWhereNull('baby_id');
+            }
+        });
     }
 
     /** First feed of each session, mirroring the client's cluster-feed folding. */

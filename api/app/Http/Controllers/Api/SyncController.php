@@ -23,24 +23,33 @@ class SyncController extends Controller
     public function state(Request $request): JsonResponse
     {
         $user = $request->user();
-        $household = $user->household()->with(['users', 'baby'])->first();
+        $household = $user->household()->with(['users', 'children'])->first();
         $since = (int) $request->query('since', 0);
 
         $partner = $household->partnerOf($user);
+        $primary = $household->children->first();
+        $invites = $household->invites()->orderBy('id')->get();
         $entries = $household->entries()
             ->where('rev', '>', $since)
             ->orderBy('rev')
             ->limit(2000)
-            ->get(['id', 'user_id', 'type', 't', 'detail', 'deleted', 'rev']);
+            ->get(['id', 'user_id', 'baby_id', 'type', 't', 'detail', 'deleted', 'rev']);
 
         $shift = $household->shifts()->latest('id')->first();
 
         return response()->json([
-            'user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
+            'user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'role' => $user->role ?? 'parent', 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
+            // legacy singular key: "the other grown-up" is now just the first other member
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
+            'members' => $household->users->sortBy('id')->values()
+                ->map(fn (User $u) => ['id' => $u->id, 'name' => $u->name, 'role' => $u->role ?? 'parent'])->all(),
+            'invites' => $invites->map(fn ($i) => ['email' => $i->email, 'role' => $i->role])->all(),
             // old clients only know about one pending seat — show them the first
-            'invitePending' => $household->invites()->orderBy('id')->value('email'),
-            'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label, 'birthdate' => $household->baby->birthdate] : null,
+            'invitePending' => $invites->first()?->email,
+            // legacy singular key: the primary (oldest) child
+            'baby' => $primary ? ['name' => $primary->name, 'age' => $primary->age_label, 'birthdate' => $primary->birthdate] : null,
+            'children' => $household->children
+                ->map(fn ($b) => ['id' => $b->id, 'name' => $b->name, 'age' => $b->age_label, 'birthdate' => $b->birthdate, 'archived' => (bool) $b->archived])->all(),
             'onDutyUserId' => $household->on_duty_user_id,
             'settings' => $household->settings,
             'shift' => $shift,
@@ -51,8 +60,20 @@ class SyncController extends Controller
         ]);
     }
 
+    /** Caregivers log and cover shifts; only parents shape the household itself. */
+    private function parentsOnly(Request $request): ?JsonResponse
+    {
+        return $request->user()->isParent()
+            ? null
+            : response()->json(['message' => 'Only a parent can change that.'], 403);
+    }
+
     public function setBaby(Request $request): JsonResponse
     {
+        if ($denied = $this->parentsOnly($request)) {
+            return $denied;
+        }
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:100'],
             'age' => ['nullable', 'string', 'max:40'],
@@ -73,6 +94,59 @@ class SyncController extends Controller
         HouseholdTouched::send($household->id, 'baby');
 
         return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Create or update one child. There is no delete — a child's log is
+     * history worth keeping, so retiring one only ever sets `archived`.
+     */
+    public function setChild(Request $request): JsonResponse
+    {
+        if ($denied = $this->parentsOnly($request)) {
+            return $denied;
+        }
+
+        $data = $request->validate([
+            'id' => ['sometimes', 'integer'],
+            'name' => ['required', 'string', 'max:100'],
+            'age' => ['nullable', 'string', 'max:40'],
+            'birthdate' => ['nullable', 'date_format:Y-m-d', 'before_or_equal:today', 'after:2015-01-01'],
+            'archived' => ['sometimes', 'boolean'],
+        ]);
+
+        $household = $request->user()->household;
+        if (isset($data['id'])) {
+            // the id must be one of ours — a guessed id from another household is a 422, not a write
+            $child = $household->children()->find($data['id']);
+            if (! $child) {
+                return response()->json(['message' => 'That child isn’t in this log.'], 422);
+            }
+        } else {
+            if ($household->children()->count() >= config('babylog.max_children')) {
+                return response()->json(['message' => 'This log is at its limit of children.'], 422);
+            }
+            $child = $household->children()->make();
+        }
+
+        // only touch fields the client sent — same omission rule as /baby
+        $values = ['name' => $data['name']];
+        if (array_key_exists('age', $data)) {
+            $values['age_label'] = $data['age'];
+        }
+        if (array_key_exists('birthdate', $data)) {
+            $values['birthdate'] = $data['birthdate'];
+        }
+        if (array_key_exists('archived', $data)) {
+            $values['archived'] = (bool) $data['archived'];
+        }
+        $child->fill($values)->save();
+
+        HouseholdTouched::send($household->id, 'children');
+
+        return response()->json(['ok' => true, 'child' => [
+            'id' => $child->id, 'name' => $child->name, 'age' => $child->age_label,
+            'birthdate' => $child->birthdate, 'archived' => (bool) $child->archived,
+        ]]);
     }
 
     public function invite(Request $request): JsonResponse
@@ -135,6 +209,66 @@ class SyncController extends Controller
         return response()->json(['ok' => true, 'code' => $code, 'mailed' => $mailed]);
     }
 
+    /** Take back a pending invite — the emailed/shown code stops opening doors. */
+    public function revokeInvite(Request $request): JsonResponse
+    {
+        if ($denied = $this->parentsOnly($request)) {
+            return $denied;
+        }
+
+        $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
+
+        $household = $request->user()->household;
+        $household->invites()->where('email', strtolower($data['email']))->delete();
+
+        HouseholdTouched::send($household->id, 'invite');
+
+        return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Remove a member (a departing caregiver, usually). Their sessions and
+     * devices die immediately; their entries keep their user_id so the log's
+     * history still says who did what.
+     */
+    public function removeMember(Request $request): JsonResponse
+    {
+        if ($denied = $this->parentsOnly($request)) {
+            return $denied;
+        }
+
+        $data = $request->validate(['user_id' => ['required', 'integer']]);
+
+        $user = $request->user();
+        $household = $user->household;
+        if ((int) $data['user_id'] === $user->id) {
+            return response()->json(['message' => 'You can’t remove yourself from your own log.'], 422);
+        }
+        $target = $household->users()->find($data['user_id']);
+        if (! $target) {
+            return response()->json(['message' => 'That person isn’t in this log.'], 422);
+        }
+
+        $target->tokens()->delete();            // every session 401s from here on
+        $target->pushSubscriptions()->delete(); // no more pushes at their devices
+
+        // duty can't sit with someone who's gone, and their in-flight shift
+        // paperwork would only render ghost cards
+        if ($household->on_duty_user_id === $target->id) {
+            $household->update(['on_duty_user_id' => $user->id]);
+        }
+        $household->shifts()->where('state', 'requested')->where('requester_id', $target->id)
+            ->update(['state' => 'cancelled']);
+        $household->shifts()->where('state', 'active')->where('user_id', $target->id)
+            ->update(['state' => 'cancelled', 'ended_at' => now()->getTimestampMs()]);
+
+        $target->delete();
+
+        HouseholdTouched::send($household->id, 'members');
+
+        return response()->json(['ok' => true]);
+    }
+
     /** Trackers the household can switch off; feeds are core and not listed. */
     private const TRACKS = ['pump', 'diapers', 'sleep', 'bath', 'meds'];
 
@@ -149,6 +283,10 @@ class SyncController extends Controller
     /** Household-level preferences (tracking toggles, dismissed nudges, Now-screen widgets, theme). Last write wins. */
     public function setSettings(Request $request): JsonResponse
     {
+        if ($denied = $this->parentsOnly($request)) {
+            return $denied;
+        }
+
         $data = $request->validate([
             'tracking' => ['sometimes', 'array'],
             'tracking.*' => ['boolean'],
@@ -207,21 +345,34 @@ class SyncController extends Controller
             'entries.*.t' => ['required', 'integer'],
             'entries.*.detail' => ['nullable', 'string', 'max:100'],
             'entries.*.deleted' => ['nullable', 'boolean'],
+            'entries.*.baby_id' => ['nullable', 'integer'],
         ]);
 
         $user = $request->user();
         $rev = now()->getTimestampMs();
+
+        // which child ids this household may write against; first (oldest) is
+        // the primary child old clients mean when they send no baby_id at all
+        $childIds = $user->household->children()->pluck('id')->all();
+        $primaryChildId = $childIds[0] ?? null;
 
         foreach ($data['entries'] as $e) {
             $existing = Entry::where('id', $e['id'])->first();
             if ($existing && $existing->household_id !== $user->household_id) {
                 continue; // id collision across households — ignore
             }
+            // a baby_id from another household is dropped, never stored: the
+            // write then behaves as if the field were absent (default on
+            // create, preserve on update)
+            $babyId = isset($e['baby_id']) && in_array((int) $e['baby_id'], $childIds, true)
+                ? (int) $e['baby_id']
+                : ($existing->baby_id ?? $primaryChildId);
             Entry::updateOrCreate(
                 ['id' => $e['id']],
                 [
                     'household_id' => $user->household_id,
                     'user_id' => $existing->user_id ?? $user->id,
+                    'baby_id' => $babyId,
                     'type' => $e['type'],
                     't' => $e['t'],
                     'detail' => isset($e['detail']) ? (string) $e['detail'] : null,
@@ -232,7 +383,7 @@ class SyncController extends Controller
         }
 
         HouseholdTouched::send($user->household_id, 'entries');
-        $this->pingPartner($user, $data['entries']);
+        $this->pingOthers($user, $data['entries']);
 
         return response()->json(['ok' => true, 'serverTime' => now()->getTimestampMs()]);
     }
@@ -244,39 +395,43 @@ class SyncController extends Controller
     ];
 
     /**
-     * "Katrina logged a bottle" — opt-in partner-activity push, throttled to
-     * one ping per 10 minutes so a backfill burst doesn't rattle a phone.
+     * "Katrina logged a bottle" — opt-in activity push to every other member,
+     * throttled per recipient to one ping per 10 minutes so a backfill burst
+     * doesn't rattle anyone's phone.
      */
-    private function pingPartner(User $user, array $entries): void
+    private function pingOthers(User $user, array $entries): void
     {
         $live = array_values(array_filter($entries, fn ($e) => empty($e['deleted'])));
         if (! $live) {
             return;
         }
-        $partner = $user->household->partnerOf($user);
-        if (! $partner || ! $partner->notifyPrefs()['partner'] || $partner->inQuietHours()) {
-            return;
-        }
-        $state = $partner->notify_state ?? [];
-        $nowMs = now()->getTimestampMs();
-        if (($state['partnerPingAt'] ?? 0) > $nowMs - 10 * 60000) {
-            return;
-        }
-        $partner->update(['notify_state' => array_merge($state, ['partnerPingAt' => $nowMs])]);
-
         $first = $live[0];
         $label = self::TYPE_LABELS[$first['type']] ?? $first['type'];
-        $tz = $partner->notifyPrefs()['tz'] ?: config('app.timezone');
-        try {
-            $at = Carbon::createFromTimestampMs($first['t'], $tz)->format('g:i A');
-        } catch (\Throwable) {
-            $at = Carbon::createFromTimestampMs($first['t'])->format('g:i A');
+        $nowMs = now()->getTimestampMs();
+
+        foreach ($user->household->othersFor($user) as $other) {
+            if (! $other->notifyPrefs()['partner'] || $other->inQuietHours()) {
+                continue;
+            }
+            // the throttle marker lives in each recipient's own notify_state
+            $state = $other->notify_state ?? [];
+            if (($state['partnerPingAt'] ?? 0) > $nowMs - 10 * 60000) {
+                continue;
+            }
+            $other->update(['notify_state' => array_merge($state, ['partnerPingAt' => $nowMs])]);
+
+            $tz = $other->notifyPrefs()['tz'] ?: config('app.timezone');
+            try {
+                $at = Carbon::createFromTimestampMs($first['t'], $tz)->format('g:i A');
+            } catch (\Throwable) {
+                $at = Carbon::createFromTimestampMs($first['t'])->format('g:i A');
+            }
+            $bits = array_filter([
+                isset($first['detail']) && $first['detail'] !== '' ? (string) $first['detail'] : null,
+                $at,
+                count($live) > 1 ? '+'.(count($live) - 1).' more' : null,
+            ]);
+            app(PushService::class)->notify($other, 'partner', $user->name.' logged '.$label, implode(' · ', $bits));
         }
-        $bits = array_filter([
-            isset($first['detail']) && $first['detail'] !== '' ? (string) $first['detail'] : null,
-            $at,
-            count($live) > 1 ? '+'.(count($live) - 1).' more' : null,
-        ]);
-        app(PushService::class)->notify($partner, 'partner', $user->name.' logged '.$label, implode(' · ', $bits));
     }
 }

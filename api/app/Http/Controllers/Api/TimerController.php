@@ -22,30 +22,40 @@ class TimerController extends Controller
     /** Start (or replace) the household's running timer. */
     public function start(Request $request): JsonResponse
     {
-        $data = $request->validate(['type' => ['required', 'in:nurse,pump,sleep']]);
+        $data = $request->validate([
+            'type' => ['required', 'in:nurse,pump,sleep'],
+            'baby_id' => ['nullable', 'integer'],
+        ]);
 
         $user = $request->user();
         $household = $user->household;
+        // the timer's child must be one of ours — a foreign id is dropped, and
+        // clients read a null baby_id as the primary child
+        $babyId = isset($data['baby_id'])
+            ? $household->children()->whereKey((int) $data['baby_id'])->value('id')
+            : null;
         $timer = [
             'id' => (string) Str::uuid(),
             'type' => $data['type'],
             'started_at' => now()->getTimestampMs(),
             'user_id' => $user->id,
+            'baby_id' => $babyId,
         ];
         $household->update(['active_timer' => $timer]);
 
         HouseholdTouched::send($household->id, 'timer');
 
-        // let the other parent know they're occupied — informational, so it
-        // honors quiet hours (unlike a direct handoff ask)
-        $partner = $household->partnerOf($user);
-        if ($partner && $partner->notifyPrefs()['timer'] && ! $partner->inQuietHours()) {
-            app(PushService::class)->notify(
-                $partner,
-                'timer',
-                $user->name.' started '.self::LABELS[$data['type']],
-                'Timer running in Baby Log.',
-            );
+        // let the rest of the household know they're occupied — informational,
+        // so it honors quiet hours (unlike a direct handoff ask)
+        foreach ($household->othersFor($user) as $other) {
+            if ($other->notifyPrefs()['timer'] && ! $other->inQuietHours()) {
+                app(PushService::class)->notify(
+                    $other,
+                    'timer',
+                    $user->name.' started '.self::LABELS[$data['type']],
+                    'Timer running in Baby Log.',
+                );
+            }
         }
 
         return response()->json(['ok' => true, 'timer' => $timer]);
