@@ -1887,9 +1887,14 @@ export default class App extends React.Component {
       toManual: () => this.setState({ manualDur: true }),
       toTimer: () => this.setState({ manualDur: false }),
       manualHint: st.key === 'nurse' ? 'Log a past feed' : st.key === 'sleep' ? 'Log a past sleep' : 'Log a past session',
-      // running-timer banner on Now
+      // running-timer banner on Now — with 2+ unarchived children the banner
+      // names the timer's child (null baby_id = primary, same rule as entries);
+      // a single-child household renders exactly as before
       timerActive: !!at,
       timerLabel: at ? (at.type === 'nurse' ? 'Nursing' : at.type === 'sleep' ? 'Sleep' : 'Pumping') : '',
+      timerChild: at && kids.length > 1
+        ? ((s.children || []).find(c => c.id === (at.baby_id ?? this.primaryChildId()))?.name || '')
+        : '',
       timerIcon: atType ? atType.icon : 'timer',
       timerColor: atType ? atType.color : OLIVE,
       timerElapsed: at ? this.stopwatch(Date.now() - at.started_at) : '',
@@ -2360,7 +2365,7 @@ export default class App extends React.Component {
                     <Sym style={{ position: 'relative', fontSize: 22, color: v.timerColor }}>{v.timerIcon}</Sym>
                   </div>
                   <div style={S('position:relative;flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
-                    <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.timerLabel} · {v.timerWho}</div>
+                    <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.timerLabel}{v.timerChild ? ' · ' + v.timerChild : ''} · {v.timerWho}</div>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:700;font-size:24px;letter-spacing:-0.03em;color:#3D392F;font-variant-numeric:tabular-nums")}>{v.timerElapsed}</div>
                   </div>
                   {v.timerMine ? (

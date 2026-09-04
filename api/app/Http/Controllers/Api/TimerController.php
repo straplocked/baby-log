@@ -45,6 +45,17 @@ class TimerController extends Controller
 
         HouseholdTouched::send($household->id, 'timer');
 
+        // with 2+ unarchived children the push names the timer's child (a null
+        // baby_id reads as the primary, same rule clients use) — the partner's
+        // lock screen shouldn't have to guess which twin is nursing
+        $childName = null;
+        if ($household->children()->where('archived', false)->count() > 1) {
+            $childName = $babyId !== null
+                ? $household->children()->whereKey($babyId)->value('name')
+                : $household->children()->value('name'); // children() is id-ordered, so first = primary
+        }
+        $title = $user->name.' started '.self::LABELS[$data['type']].($childName ? ' for '.$childName : '');
+
         // let the rest of the household know they're occupied — informational,
         // so it honors quiet hours (unlike a direct handoff ask)
         foreach ($household->othersFor($user) as $other) {
@@ -52,7 +63,7 @@ class TimerController extends Controller
                 app(PushService::class)->notify(
                     $other,
                     'timer',
-                    $user->name.' started '.self::LABELS[$data['type']],
+                    $title,
                     'Timer running in Baby Log.',
                 );
             }
