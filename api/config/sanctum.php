@@ -50,7 +50,13 @@ return [
     |
     */
 
-    'expiration' => null,
+    // 90 days: long enough that a parent's phone doesn't demand a login mid-leave,
+    // short enough that stale rows from old devices actually die (see the daily
+    // sanctum:prune-expired in routes/console.php)
+    // 90 days: long enough that a parent's phone doesn't demand a login mid-leave,
+    // short enough that stale rows from old devices actually die (see the daily
+    // sanctum:prune-expired in routes/console.php)
+    'expiration' => 60 * 24 * 90,
 
     /*
     |--------------------------------------------------------------------------
