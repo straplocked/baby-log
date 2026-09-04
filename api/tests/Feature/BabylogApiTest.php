@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\PushService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Laravel\Sanctum\PersonalAccessToken;
 use Tests\TestCase;
 
 class BabylogApiTest extends TestCase
@@ -79,6 +80,37 @@ class BabylogApiTest extends TestCase
         $this->register('Ben', 'ben@example.com');
         $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'wrong-password'])->assertStatus(422);
         $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
+    }
+
+    public function test_tokens_expire_after_ninety_days(): void
+    {
+        $this->register('Ben', 'ben@example.com');
+        $old = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
+
+        // day 89: still inside the window
+        $this->travel(89)->days();
+        $this->getJson('/api/state?since=0', $this->authed($old))->assertOk();
+
+        // day 91: past it — the stale token is dead, a fresh login works
+        $this->travel(2)->days();
+        $this->getJson('/api/state?since=0', $this->authed($old))->assertUnauthorized();
+        $fresh = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
+        $this->getJson('/api/state?since=0', $this->authed($fresh))->assertOk();
+    }
+
+    public function test_prune_expired_reaps_stale_token_rows_but_keeps_live_ones(): void
+    {
+        $this->register('Ben', 'ben@example.com'); // token row from day 0
+
+        // day 98: past 90-day expiry plus the 168h retention window
+        $this->travel(98)->days();
+        $live = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
+        $this->assertSame(2, PersonalAccessToken::count());
+
+        $this->artisan('sanctum:prune-expired', ['--hours' => 168])->assertSuccessful();
+
+        $this->assertSame(1, PersonalAccessToken::count());
+        $this->getJson('/api/state?since=0', $this->authed($live))->assertOk();
     }
 
     // ── household scoping ─────────────────────────────────────────────────────
