@@ -25,7 +25,7 @@ The design brief: "Entries write locally first and sync when there's signal, so 
 
 - Every entry is `{id, type, t, detail, deleted}` with a **client-generated UUID**, written to `localStorage` (`babylog:v2`) instantly.
 - Changed ids go into an **outbox**; a debounced flush POSTs them to `/api/entries` (batch upsert, last-write-wins, server stamps a `rev`).
-- Pulls hit `GET /api/state?since=<rev>` — one endpoint returns everything needed to converge (user, members, children, invites, duty, shift, changed entries — plus the legacy singular `partner`/`baby`/`invitePending` keys, kept so installed PWAs that predate multi-member keep working).
+- Pulls hit `GET /api/state?since=<rev>` — one endpoint returns everything needed to converge (user, members, children, invites, duty, shift, changed entries, server caps (`limits`), removed-member name snapshots (`formerMembers`) — plus the legacy singular `partner`/`baby`/`invitePending` keys, kept so installed PWAs that predate multi-member keep working).
 - Every entry carries a `baby_id`; a client that omits it gets the primary (oldest) child on create, and an update without it never re-homes the entry — old single-child clients stay correct against a multi-child server.
 - **Deletes are tombstones** (`deleted: true`), so they sync like any other write; all views filter them.
 - Merge rule: server wins for any entry **not** currently in the outbox; unpushed local writes win until flushed.
