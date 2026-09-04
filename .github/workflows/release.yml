@@ -1,0 +1,97 @@
+# Tagged releases: pushing a v* tag runs the API test suite, publishes all
+# three images (app, api, aio) to GHCR as :vX.Y.Z + :latest, and creates a
+# GitHub Release carrying the source tarball the Unraid installer consumes
+# plus its sha256 in checksums.txt. GitHub's own /archive/ tarballs are not
+# byte-stable across backend changes, so the installer verifies against this
+# release-attached tarball, not GitHub's generated one.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+      - name: Install API dependencies
+        working-directory: api
+        run: composer install --no-interaction --prefer-dist
+      - name: Prepare test env
+        working-directory: api
+        run: cp .env.example .env && php artisan key:generate
+      - name: Run API tests
+        working-directory: api
+        env:
+          BROADCAST_CONNECTION: log
+        run: php artisan test --compact
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/baby-log-app:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/baby-log-app:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push api image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/baby-log-api:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/baby-log-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push aio image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/aio/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/baby-log-aio:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/baby-log-aio:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source tarball + checksums
+        run: |
+          git archive --format=tar.gz --prefix="baby-log-${GITHUB_REF_NAME}/" \
+            -o "baby-log-${GITHUB_REF_NAME}.tar.gz" "${GITHUB_REF_NAME}"
+          sha256sum "baby-log-${GITHUB_REF_NAME}.tar.gz" > checksums.txt
+          cat checksums.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "baby-log-${GITHUB_REF_NAME}.tar.gz" checksums.txt

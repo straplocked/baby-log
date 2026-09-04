@@ -21,9 +21,10 @@ Containers (compose project `baby-log`, from `src/deploy/unraid/docker-compose.y
 
 ## Update / install
 
-Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Script**. It pulls the latest `main` tarball, rebuilds, and restarts; `.env` and `data/` are untouched. The same script is the installer (idempotent).
+Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Script**. It resolves the **latest GitHub release** (`releases/latest`), downloads that release's source tarball, sha256-verifies it against the release's `checksums.txt`, rebuilds, and restarts; `.env` and `data/` are untouched. The same script is the installer (idempotent).
 
-- Pin a version instead of `main`: run with `BABYLOG_REF=v1.0.0` in the environment (tags should be the norm once released).
+- If no release exists yet or the GitHub API is unreachable, the script falls back to tracking `main` (unverified tarball) so updates never dead-end.
+- Pin a specific ref with `BABYLOG_REF` in the environment: `BABYLOG_REF=v1.0.0` installs that release (checksum-verified when the release carries `checksums.txt`; a warning + unverified fallback otherwise), `BABYLOG_REF=main` restores the old track-main behavior.
 - The script lives at [deploy/unraid/babylog.sh](../deploy/unraid/babylog.sh); the User Script is just `curl | sh` of it from `main`.
 
 ## Wipe all data (testing)
@@ -87,7 +88,9 @@ Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:
 
 ## CI / images
 
-`.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/baby-log-app` and `…-api` (`:latest` + commit SHA). These images are the basis for the future Unraid Community Apps template.
+`.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/baby-log-app` and `…-api` (`:main` + commit SHA).
+
+`.github/workflows/release.yml`: pushing a `v*` tag runs the same test suite, then builds and pushes all three images — `baby-log-app`, `baby-log-api`, and `baby-log-aio` — tagged `:vX.Y.Z` **and** `:latest` (releases own `:latest`; `main` builds never touch it), then creates a GitHub Release with generated notes, a `git archive` source tarball (`baby-log-vX.Y.Z.tar.gz`), and its sha256 in `checksums.txt`. The Unraid updater consumes that tarball + checksum; the images are the basis for the Unraid Community Apps template.
 
 ## All-in-one image (Community Apps)
 
