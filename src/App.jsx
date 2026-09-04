@@ -317,7 +317,9 @@ export default class App extends React.Component {
       }
       if (this.state.settingsDirty) {
         const pushed = this.state.settings
-        await api.saveSettings(pushed)
+        // widgets is null until the household customizes it — don't send the null
+        const { widgets, ...rest } = pushed
+        await api.saveSettings(widgets == null ? rest : pushed)
         // a toggle mid-flight makes a new settings object — only clear if nothing changed
         if (this.state.settings === pushed) this.setState({ settingsDirty: false })
       }

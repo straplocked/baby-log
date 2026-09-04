@@ -222,6 +222,18 @@ class BabylogApiTest extends TestCase
         $this->assertSame(['meds'], $settings['dismissed']);
     }
 
+    public function test_settings_accept_a_null_widgets_echo(): void
+    {
+        // clients that never customized the Now-screen cards echo widgets back as
+        // null — that must not 422 the whole settings save (e.g. a unit change)
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/settings', ['widgets' => null, 'unit' => 'ml'], $this->authed($ben))->assertOk();
+
+        $settings = $this->getJson('/api/state', $this->authed($ben))->json('settings');
+        $this->assertSame('ml', $settings['unit']);
+        $this->assertArrayNotHasKey('widgets', $settings);
+    }
+
     public function test_settings_drop_unknown_tracker_keys(): void
     {
         $ben = $this->register('Ben', 'ben@example.com')->json('token');

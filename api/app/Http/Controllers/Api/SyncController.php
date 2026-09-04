@@ -136,7 +136,8 @@ class SyncController extends Controller
             'tracking.*' => ['boolean'],
             'dismissed' => ['sometimes', 'array', 'max:20'],
             'dismissed.*' => ['string', 'max:30'],
-            'widgets' => ['sometimes', 'array', 'max:8'],
+            // nullable: clients that never customized widgets echo back null
+            'widgets' => ['sometimes', 'nullable', 'array', 'max:8'],
             'widgets.*' => ['string', 'max:20'],
             'theme' => ['sometimes', 'nullable', 'array'],
             'theme.accent' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_ACCENTS)],
@@ -158,7 +159,7 @@ class SyncController extends Controller
         if (array_key_exists('dismissed', $data)) {
             $settings['dismissed'] = array_values(array_intersect($data['dismissed'], self::TRACKS));
         }
-        if (array_key_exists('widgets', $data)) {
+        if (is_array($data['widgets'] ?? null)) {
             // keep the client's order, drop unknowns and duplicates
             $settings['widgets'] = array_values(array_unique(array_intersect($data['widgets'], self::WIDGETS)));
         }
