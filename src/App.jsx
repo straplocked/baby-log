@@ -97,6 +97,13 @@ const OLIVE = 'var(--accent)'
 const DAY = 86400000
 const ME_COLOR = '#7A93B5'
 const PARTNER_COLOR = 'var(--accent)'
+// >2 grown-ups: each member keeps a stable color from their position in the
+// id-ordered members list (the server sends it sorted, so every device agrees).
+// The first two slots are the classic me/partner pair; extras walk the type
+// color hue ladder. JS style objects bypass S(), so vars/oklch only here.
+const MEMBER_COLORS = [ME_COLOR, PARTNER_COLOR, 'oklch(0.60 0.075 300)', 'oklch(0.60 0.075 60)', 'oklch(0.60 0.075 195)', 'oklch(0.60 0.075 350)']
+// mirrors config('babylog.max_household_users') — the invite row hides when full
+const MAX_MEMBERS = 6
 
 // ── household theme (accent + background) ────────────────────────────────────
 // Every accent keeps olive's exact oklch lightness/chroma ladder (main ≈0.61/0.073,
@@ -161,7 +168,10 @@ const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'invi
   'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide',
   // multi-child household: the lists sync via /state; selectedChildId is a
   // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
-  'children', 'members', 'selectedChildId']
+  'children', 'members', 'selectedChildId',
+  // invites[] syncs like members; inviteCodeFor remembers which pending invite
+  // the cached inviteCode belongs to (codes are shown once, only to the inviter)
+  'invites', 'inviteCodeFor']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -210,6 +220,9 @@ export default class App extends React.Component {
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
       me: null, partner: null, invitePending: null,
       children: [], members: [], selectedChildId: null, sheetChildId: null,
+      invites: [], inviteRole: 'parent', inviteCodeFor: null,
+      // settings management UI — ephemeral, like the acct* fields
+      childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', childBusy: false, removeConfirmId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       outbox: [], lastSync: 0, offline: false,
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
@@ -368,6 +381,7 @@ export default class App extends React.Component {
         partner: others.length ? { id: others[0].id, name: others[0].name } : (st.members ? null : st.partner ?? null),
         members: st.members || [],
         children: st.children || [],
+        invites: st.invites || [],
         onDutyUserId: st.onDutyUserId, serverShift: st.shift,
         lastSync: st.serverTime,
       }
@@ -471,17 +485,65 @@ export default class App extends React.Component {
     const email = this.state.inviteField.trim()
     if (!email) return
     try {
-      const r = await api.invite(email)
-      this.setState({
-        invitePending: email, inviteCode: r.code, inviteMailed: !!r.mailed,
+      const r = await api.invite(email, this.state.inviteRole)
+      this.setState(s => ({
+        invitePending: email, inviteCode: r.code, inviteCodeFor: email.toLowerCase(), inviteMailed: !!r.mailed,
+        // optimistic row until the next pull brings the server's list
+        invites: s.invites.some(i => i.email === email.toLowerCase())
+          ? s.invites.map(i => i.email === email.toLowerCase() ? { ...i, role: s.inviteRole } : i)
+          : [...s.invites, { email: email.toLowerCase(), role: s.inviteRole }],
+        inviteField: '',
         toast: r.mailed ? 'Emailed ' + email + ' — their code is ' + r.code : 'Invited ' + email + ' — their code is ' + r.code,
         undoAction: null,
-      })
+      }))
       this.bumpToast()
     } catch (e) {
-      this.setState({ toast: e.status ? 'Invite failed — check the email' : 'No signal — try again later', undoAction: null })
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({ toast: e.status ? (first || e.message || 'Invite failed — check the email') : 'No signal — try again later', undoAction: null })
       this.bumpToast()
     }
+  }
+
+  // take back a pending invite — its code stops working right away
+  revokeInvite = email => {
+    this.setState(s => ({
+      invites: s.invites.filter(i => i.email !== email),
+      invitePending: s.invitePending === email ? null : s.invitePending,
+      inviteCode: s.inviteCodeFor === email ? null : s.inviteCode,
+      inviteCodeFor: s.inviteCodeFor === email ? null : s.inviteCodeFor,
+      toast: 'Invite revoked — that code no longer works', undoAction: null,
+    }))
+    this.bumpToast()
+    api.revokeInvite(email).catch(() => this.setState({ offline: true }))
+  }
+
+  copyInviteCode = code => {
+    try { navigator.clipboard.writeText(code).catch(() => { /* stays on screen to copy by hand */ }) } catch { /* no clipboard API */ }
+    this.setState({ toast: 'Code copied — send it to them', undoAction: null })
+    this.bumpToast()
+  }
+
+  // remove a member (parents only; the server also refuses self-removal)
+  removeMember = id => {
+    const gone = this.memberById(id)
+    this.setState(s => {
+      const members = s.members.filter(m => m.id !== id)
+      const others = members.filter(m => s.me && m.id !== s.me.id)
+      return {
+        removeConfirmId: null,
+        members,
+        partner: s.partner && s.partner.id === id ? (others.length ? { id: others[0].id, name: others[0].name } : null) : s.partner,
+        toast: (gone?.name || 'They') + ' can no longer open this log', undoAction: null,
+      }
+    })
+    this.bumpToast()
+    api.removeMember(id).then(() => this.sync()).catch(e => {
+      if (e.status) {
+        this.setState({ toast: e.message || 'That didn’t go through — try again', undoAction: null })
+        this.bumpToast()
+        this.sync() // fall back to server truth
+      } else this.setState({ offline: true })
+    })
   }
 
   doLogout = async (callApi = true) => {
@@ -500,6 +562,8 @@ export default class App extends React.Component {
       forgotOpen: false, forgotEmail: '', forgotResult: null,
       entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null, inviteCode: null, inviteMailed: false,
       children: [], members: [], selectedChildId: null, sheetChildId: null,
+      invites: [], inviteRole: 'parent', inviteCodeFor: null,
+      childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', childBusy: false, removeConfirmId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false,
       shiftOpen: false, shiftIn: false, shiftLeaving: false, toast: null, toastLeaving: false,
@@ -577,6 +641,85 @@ export default class App extends React.Component {
     return (this.state.selectedChildId != null && kids.find(c => c.id === this.state.selectedChildId)) || kids[0]
   }
   selChildId() { const c = this.selChild(); return c ? c.id : null }
+
+  // ── members (multi-member households) ──────────────────────────────────────
+  // caregivers log, run timers, and cover shifts; only parents shape the
+  // household — the server 403s them, this just keeps the controls honest
+  isParent() { return (this.state.me?.role || 'parent') === 'parent' }
+  // members includes me; me/partner are the pre-sync fallbacks for old caches
+  memberById(id) {
+    if (id == null) return null
+    const { me, partner, members } = this.state
+    return members.find(m => m.id === id)
+      || (me && me.id === id ? me : null)
+      || (partner && partner.id === id ? partner : null)
+  }
+  memberName(id, fallback) { const m = this.memberById(id); return (m && m.name) || fallback }
+  memberColor(id) {
+    const i = this.state.members.findIndex(m => m.id === id)
+    return i >= 0 ? MEMBER_COLORS[i % MEMBER_COLORS.length] : PARTNER_COLOR
+  }
+
+  // ── children management (settings; parents only — server enforces too) ─────
+  // optimistic list update, keeping the primary-child compat mirrors in step
+  childPatch(id, patch) {
+    this.setState(s => {
+      const children = s.children.map(c => c.id === id ? { ...c, ...patch } : c)
+      const primary = children[0] && children[0].id === id
+      return {
+        children,
+        ...(primary && patch.name != null ? { babyName: patch.name } : {}),
+        ...(primary && patch.birthdate !== undefined ? { babyBirthdate: patch.birthdate } : {}),
+      }
+    })
+  }
+  setChildEdit = (id, val) => this.setState(s => ({ childEdits: { ...s.childEdits, [id]: val } }))
+  saveChildName = id => {
+    const c = this.state.children.find(x => x.id === id)
+    if (!c) return
+    const name = (this.state.childEdits[id] ?? '').trim()
+    if (!name || name === c.name) return
+    this.childPatch(id, { name })
+    api.setChild({ id, name }).catch(() => this.setState({ offline: true }))
+  }
+  setChildDob = id => e => {
+    const bd = e.target.value
+    const c = this.state.children.find(x => x.id === id)
+    if (!bd || !c) return
+    this.childPatch(id, { birthdate: bd })
+    // /children always wants the name — send the current one alongside
+    api.setChild({ id, name: c.name || 'Baby', birthdate: bd }).catch(() => this.setState({ offline: true }))
+  }
+  toggleChildArchived = id => {
+    const c = this.state.children.find(x => x.id === id)
+    if (!c) return
+    const archived = !c.archived
+    this.childPatch(id, { archived })
+    // archiving the child a device was viewing snaps that view back to primary
+    this.setState(s => (archived && s.selectedChildId === id ? { selectedChildId: null } : null))
+    api.setChild({ id, name: c.name || 'Baby', archived }).catch(() => this.setState({ offline: true }))
+  }
+  addChild = async () => {
+    const name = this.state.childAddName.trim()
+    if (!name || this.state.childBusy) return
+    this.setState({ childBusy: true })
+    try {
+      const r = await api.setChild({ name, ...(this.state.childAddDob ? { birthdate: this.state.childAddDob } : {}) })
+      this.setState(s => ({
+        childBusy: false, childAddOpen: false, childAddName: '', childAddDob: '',
+        children: s.children.some(c => c.id === r.child.id) ? s.children : [...s.children, r.child],
+        toast: (r.child.name || 'Child') + ' added — the pills on Now switch between them', undoAction: null,
+      }))
+    } catch (e) {
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({
+        childBusy: false,
+        toast: e.status ? (first || e.message || 'That didn’t go through — try again') : 'No signal — try again in a moment.',
+        undoAction: null,
+      })
+    }
+    this.bumpToast()
+  }
 
   // ── entry helpers (views always work on live = non-deleted entries) ────────
   // every view and aggregate reads the selected child's log: a null babyId
@@ -909,12 +1052,18 @@ export default class App extends React.Component {
     const until = s.until
     const untilAt = this.untilAt(until)
     this.closeShift()
-    this.setState(st => ({
-      shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
-      onDutyUserId: st.me?.id ?? st.onDutyUserId,
-      serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, plan, until, until_at: untilAt, started_at: Date.now() },
-      toast: 'You’re on duty · ' + (st.partner?.name || 'your partner') + ' notified', undoAction: null,
-    }), () => this.bumpToast())
+    this.setState(st => {
+      // name whoever's being relieved: the requester of a pending ask, else the
+      // previous duty holder — with two members both are just "the partner"
+      const fromId = st.serverShift?.state === 'requested' ? st.serverShift.requester_id
+        : (st.onDutyUserId !== st.me?.id ? st.onDutyUserId : null)
+      return {
+        shift: undefined, handbackNote: '', plan, planDraft: null, planOff: [],
+        onDutyUserId: st.me?.id ?? st.onDutyUserId,
+        serverShift: { id: st.serverShift?.id ?? -1, state: 'active', user_id: st.me?.id, requester_id: st.serverShift?.state === 'requested' ? st.serverShift.requester_id : null, plan, until, until_at: untilAt, started_at: Date.now() },
+        toast: 'You’re on duty · ' + (this.memberName(fromId, st.partner?.name) || 'your partner') + ' notified', undoAction: null,
+      }
+    }, () => this.bumpToast())
     api.shiftAccept(plan, until, untilAt).then(r => this.setState({ serverShift: r.shift })).catch(this.shiftFail)
   }
   addPlanFeed = () => this.setState(s => {
@@ -924,22 +1073,31 @@ export default class App extends React.Component {
   }, () => api.shiftPlan(this.state.plan).catch(this.shiftFail))
   handBack = () => {
     const note = this.state.handbackNote
-    this.setState(s => ({
-      plan: [],
-      serverShift: s.serverShift && s.serverShift.state === 'active'
-        ? { ...s.serverShift, state: 'completed', ended_at: Date.now(), handback_note: note }
-        : { id: -2, state: 'completed', user_id: s.me?.id, started_at: s.serverShift?.started_at ?? Date.now(), ended_at: Date.now(), handback_note: note },
-      onDutyUserId: s.partner?.id ?? s.onDutyUserId,
-    }))
+    this.setState(s => {
+      // duty returns to the shift's stored requester (the server's rule too);
+      // a self-started shift or a gone requester falls back to the first other
+      const sh = s.serverShift
+      const reqId = sh && sh.state === 'active' && sh.user_id === s.me?.id ? sh.requester_id : null
+      const backTo = (reqId && reqId !== s.me?.id && this.memberById(reqId)) ? reqId : (s.partner?.id ?? s.onDutyUserId)
+      return {
+        plan: [],
+        serverShift: sh && sh.state === 'active'
+          ? { ...sh, state: 'completed', ended_at: Date.now(), handback_note: note }
+          : { id: -2, state: 'completed', user_id: s.me?.id, started_at: sh?.started_at ?? Date.now(), ended_at: Date.now(), handback_note: note },
+        onDutyUserId: backTo,
+      }
+    })
     api.shiftHandback(note).then(r => { if (r.shift) this.setState({ serverShift: r.shift }) }).catch(this.shiftFail)
   }
   requestHandoff = () => {
     const note = this.state.handbackNote
     const partner = this.state.partner
+    // the server fans the ask out to everyone else in the household
+    const others = this.state.members.filter(m => this.state.me && m.id !== this.state.me.id)
     this.closeShift()
     this.setState(s => ({
       serverShift: { id: -3, state: 'requested', requester_id: s.me?.id, note, requested_at: Date.now() },
-      toast: (partner?.name || 'Your partner') + ' will get your handoff ask', undoAction: null,
+      toast: (others.length > 1 ? 'Everyone else' : (partner?.name || 'Your partner')) + ' will get your handoff ask', undoAction: null,
     }), () => this.bumpToast())
     api.shiftRequest(note).catch(this.shiftFail)
   }
@@ -1376,10 +1534,17 @@ export default class App extends React.Component {
 
     // queued-but-unsynced rows get a dimmed dot until the outbox flushes
     const pendingIds = new Set(s.outbox)
+    // 3+ grown-ups: rows carry a small who-logged-it initial chip (a two-person
+    // household knows who "the other one" is, so it stays chipless like today)
+    const showBy = s.members.length > 2
+    const byChipFor = e => {
+      const m = showBy ? this.memberById(e.by) : null
+      return m ? { initial: initial(m.name), name: m.name, color: this.memberColor(m.id) } : null
+    }
     const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
       time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
-      pending: pendingIds.has(e.id),
+      pending: pendingIds.has(e.id), byChip: byChipFor(e),
     }))
 
     // every day on the device, grouped for the History drill-down
@@ -1411,7 +1576,7 @@ export default class App extends React.Component {
       rows: [...dayEvs].sort((a, b) => a.t - b.t).map(e => ({
         time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e, true),
         icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
-        pending: pendingIds.has(e.id),
+        pending: pendingIds.has(e.id), byChip: byChipFor(e),
       })),
       prev: s.historyDay > oldestKey ? () => this.setState({ historyDay: dayShift(s.historyDay, -1) }) : null,
       next: s.historyDay < todayKey ? () => this.setState({ historyDay: dayShift(s.historyDay, 1) }) : null,
@@ -1500,9 +1665,10 @@ export default class App extends React.Component {
       ] : []),
     ]
 
-    // nudge to switch off a daily-expected tracker that clearly isn't being used
+    // nudge to switch off a daily-expected tracker that clearly isn't being
+    // used — parents only, since acting on it writes household settings
     let trackRec = null
-    if (week.length >= 20) {
+    if (this.isParent() && week.length >= 20) {
       for (const tr of TRACKS) {
         if (!['diapers', 'sleep', 'meds'].includes(tr.key)) continue // baths/pumping are legitimately occasional
         if (!this.trackOn(tr.key) || s.settings.dismissed.includes(tr.key)) continue
@@ -1511,11 +1677,25 @@ export default class App extends React.Component {
       }
     }
 
-    // shift window + plan progress
+    // shift window + plan progress — "someone else" is resolved by id against
+    // members now, so a third grown-up's shift or ask renders under their name
     const activeMine = sh && sh.state === 'active' && me && sh.user_id === me.id
-    const activeTheirs = !!(partner && sh && sh.state === 'active' && sh.user_id === partner.id)
+    const activeTheirs = !!(me && sh && sh.state === 'active' && sh.user_id !== me.id && this.memberById(sh.user_id))
     const completed = sh && sh.state === 'completed'
-    const incomingReq = !!(partner && sh && sh.state === 'requested' && sh.requester_id === partner.id)
+    const incomingReq = !!(me && sh && sh.state === 'requested' && sh.requester_id !== me.id && this.memberById(sh.requester_id))
+    // the humans on the other side of each surface — with two members these
+    // all collapse to "the partner", with more they name the right person
+    const requesterName = incomingReq ? this.memberName(sh.requester_id, partnerName) : partnerName
+    const requesterInitial = incomingReq ? initial(this.memberName(sh.requester_id, partner?.name)) : initial(partner?.name)
+    const requesterColor = incomingReq && s.members.length > 2 ? this.memberColor(sh.requester_id) : PARTNER_COLOR
+    const shiftOwnerName = sh && sh.user_id != null ? this.memberName(sh.user_id, partnerName) : partnerName
+    const shiftOwnerInitial = sh && sh.user_id != null ? initial(this.memberName(sh.user_id, partner?.name)) : initial(partner?.name)
+    const shiftOwnerColor = sh && sh.user_id != null && s.members.length > 2 ? this.memberColor(sh.user_id) : PARTNER_COLOR
+    const dutyHolder = !iAmOnDuty && s.onDutyUserId != null ? this.memberById(s.onDutyUserId) : null
+    const dutyName = dutyHolder?.name || partnerName
+    // handing back addresses whoever asked me to cover (stored on the shift)
+    const myShiftReqId = activeMine && sh.requester_id && sh.requester_id !== me.id ? sh.requester_id : null
+    const hbName = myShiftReqId ? this.memberName(myShiftReqId, partnerName) : partnerName
     const shiftStart = (activeMine || activeTheirs || completed ? sh.started_at : null) || Date.now()
     const shiftEnd = completed ? sh.ended_at : null
     const shiftEntries = live.filter(e => e.t >= shiftStart && (!shiftEnd || e.t <= shiftEnd)).sort((a, b) => a.t - b.t)
@@ -1587,6 +1767,7 @@ export default class App extends React.Component {
           // seed the editable account fields fresh each visit; abandoned edits don't linger
           acctName: me?.name || '', acctBabyName: s.babyName || '',
           acctOpen: null, acctError: null, acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
+          childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', removeConfirmId: null,
         })
       },
       settingsBack: () => {
@@ -1677,7 +1858,7 @@ export default class App extends React.Component {
       timerColor: atType ? atType.color : OLIVE,
       timerElapsed: at ? this.stopwatch(Date.now() - at.started_at) : '',
       timerMine: !!(at && me && at.user_id === me.id),
-      timerWho: at ? (at.user_id === me?.id ? 'You' : partnerName) : '',
+      timerWho: at ? (at.user_id === me?.id ? 'You' : this.memberName(at.user_id, partnerName)) : '',
       stopTimer: this.stopTimer,
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '', toastLeaving: s.toastLeaving, canUndo: !!s.undoAction,
@@ -1687,13 +1868,21 @@ export default class App extends React.Component {
       hasPartner: !!partner,
       partnerName, myName,
       partnerInitial: initial(partner?.name), myInitial: initial(me?.name),
+      requesterName, requesterInitial, requesterColor,
+      shiftOwnerName, shiftOwnerInitial, shiftOwnerColor,
+      // who I'd relieve / who relieves me — the take-over sheet's counterparty
+      relieveName: dutyName,
+      relieveInitial: initial(dutyHolder?.name || partner?.name),
+      relieveColor: !iAmOnDuty && s.members.length > 2 && s.onDutyUserId != null ? this.memberColor(s.onDutyUserId) : PARTNER_COLOR,
+      hbName,
+      askLabel: s.members.length > 2 ? 'Ask for someone to take over — sends your note' : 'Ask ' + partnerName + ' to take over — sends your note',
       incoming: incomingReq && s.screen === 'home',
       mine: iAmOnDuty && !!partner && activeMine,
       theirs: activeTheirs && !iAmOnDuty,
       theirShiftSub: activeTheirs ? 'since ' + this.clock(shiftStart) + (sh.until ? ' · ' + sh.until.charAt(0).toLowerCase() + sh.until.slice(1) : '') : '',
-      dutyInitial: iAmOnDuty ? initial(me?.name) : initial(partner?.name),
-      dutyColor: iAmOnDuty ? ME_COLOR : PARTNER_COLOR,
-      dutyLabel: partner ? (iAmOnDuty ? 'You · on duty' : partnerName + ' · on duty') : 'Just you so far',
+      dutyInitial: iAmOnDuty ? initial(me?.name) : initial(dutyHolder?.name || partner?.name),
+      dutyColor: iAmOnDuty ? ME_COLOR : (s.members.length > 2 && s.onDutyUserId != null ? this.memberColor(s.onDutyUserId) : PARTNER_COLOR),
+      dutyLabel: partner ? (iAmOnDuty ? 'You · on duty' : dutyName + ' · on duty') : 'Just you so far',
       footerShiftLabel: iAmOnDuty ? 'Hand off' : 'Take over',
       requestAgo: 'asked ' + (reqMins < 1 ? 'just now' : reqMins + ' min ago'),
       requestNote: (sh && sh.note) || ('Can you take ' + (s.babyName || 'the baby') + '? Next feeds look like ' + t1 + ' and ' + t2 + ' — that’s the usual rhythm.'),
@@ -1702,12 +1891,12 @@ export default class App extends React.Component {
         const on = s.until === u
         return { label: u, onTap: () => this.setState({ until: u }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
-      theirShiftLine: completed ? (partnerName + ' has been on since ' + this.clock(sh.ended_at)) : (partnerName + ' has ' + (s.babyName || 'the baby') + ' right now'),
+      theirShiftLine: completed ? (dutyName + ' has been on since ' + this.clock(sh.ended_at)) : (dutyName + ' has ' + (s.babyName || 'the baby') + ' right now'),
       shiftMounted: shiftUp, shiftShown: s.shiftOpen && s.shiftIn,
       sheetTheirs: shiftUp && !iAmOnDuty && !showReport,
       sheetMine: shiftUp && iAmOnDuty && !showReport,
       sheetReport: showReport,
-      reportTitle: iHandedBack ? partnerName + '’s back on' : (partnerName + ' handed back'),
+      reportTitle: iHandedBack ? dutyName + '’s back on' : (shiftOwnerName + ' handed back'),
       openShift: this.openShift, closeShift: this.closeShift, acceptShift: this.acceptShift, handBack: this.handBack, addPlanFeed: this.addPlanFeed,
       requestHandoff: this.requestHandoff,
       canRequest: iAmOnDuty && !!partner && !(sh && sh.state === 'requested'),
@@ -1762,8 +1951,8 @@ export default class App extends React.Component {
             : 'Flip it on and allow the permission — then pick what’s worth a ping.',
           rows: [
             row('handoff', 'Handoff asks & handbacks', 'swap_horiz', 'var(--accent)'),
-            ...(partner ? [row('timer', partnerName + ' starts a timer', 'timer', 'oklch(0.60 0.075 350)')] : []),
-            ...(partner ? [row('partner', partnerName + ' logs something', 'edit_note', 'oklch(0.60 0.075 300)')] : []),
+            ...(partner ? [row('timer', (s.members.length > 2 ? 'Someone' : partnerName) + ' starts a timer', 'timer', 'oklch(0.60 0.075 350)')] : []),
+            ...(partner ? [row('partner', (s.members.length > 2 ? 'Someone' : partnerName) + ' logs something', 'edit_note', 'oklch(0.60 0.075 300)')] : []),
             row('feed', 'Feed reminder', 'local_drink', 'oklch(0.60 0.075 250)'),
             ...(this.trackOn('sleep') ? [row('wake', 'Wake window watch', 'wb_twilight', 'oklch(0.60 0.075 25)')] : []),
             ...(this.trackOn('meds') ? [row('meds', 'Daily meds nudge', 'medication', 'oklch(0.60 0.075 150)')] : []),
@@ -1825,6 +2014,80 @@ export default class App extends React.Component {
         const on = s.exportRange === val
         return { label, onTap: () => this.setState({ exportRange: val }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
       }),
+      // ── management surfaces (settings) ─────────────────────────────────────
+      canManage: this.isParent(),
+      inviteRoleChips: [['parent', 'Parent'], ['caregiver', 'Caregiver']].map(([key, label]) => {
+        const on = s.inviteRole === key
+        return { key, label, onTap: () => this.setState({ inviteRole: key }), ...(on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }) }
+      }),
+      childrenCard: (() => {
+        const all = s.children
+        if (!all.length) return null // pre-sync cache — the legacy About card still renders
+        const canEdit = this.isParent()
+        return {
+          header: all.length > 1 ? 'Children' : 'About ' + (all[0].name || 'Baby'),
+          canEdit,
+          canAdd: canEdit && all.length < 10, // mirrors config('babylog.max_children')
+          rows: all.map((c, i) => ({
+            id: c.id, primary: i === 0, archived: !!c.archived,
+            name: s.childEdits[c.id] ?? c.name ?? '',
+            plainName: c.name || 'Baby',
+            birthdate: c.birthdate || '',
+            ageText: c.birthdate ? this.ageInfoFor(c.birthdate, c.age).label + ' old' : (c.age || '—'),
+            setName: e => this.setChildEdit(c.id, e.target.value),
+            saveName: () => this.saveChildName(c.id),
+            setDob: this.setChildDob(c.id),
+            onArchive: () => this.toggleChildArchived(c.id),
+          })),
+          addOpen: s.childAddOpen,
+          toggleAdd: () => this.setState(x => ({ childAddOpen: !x.childAddOpen, childAddName: '', childAddDob: '' })),
+          addName: s.childAddName, setAddName: e => this.setState({ childAddName: e.target.value }),
+          addDob: s.childAddDob, setAddDob: e => this.setState({ childAddDob: e.target.value }),
+          submitAdd: this.addChild, addBusy: s.childBusy,
+          hint: !canEdit ? 'Only a parent can edit the children.'
+            : all.length > 1 ? 'The pills on Now and History switch between children. Hiding one tucks it out of the pills — nothing about their log is deleted.'
+            : (s.babyBirthdate ? this.ageInfoFor(s.babyBirthdate, s.age).label + ' old' : 'Set it and the log thinks in their weeks — insights compare against their age.'),
+        }
+      })(),
+      household: (() => {
+        const canManage = this.isParent()
+        // pre-sync caches only know me + partner — both grown-ups, both parents
+        const mem = s.members.length ? s.members : [
+          ...(me ? [{ id: me.id, name: me.name, role: me.role || 'parent' }] : []),
+          ...(partner ? [{ id: partner.id, name: partner.name, role: 'parent' }] : []),
+        ]
+        const seats = mem.length + s.invites.length
+        return {
+          members: mem.map((m, i) => ({
+            id: m.id,
+            name: m.name || 'Member',
+            isMe: !!(me && m.id === me.id),
+            initial: initial(m.name),
+            color: MEMBER_COLORS[i % MEMBER_COLORS.length],
+            roleLabel: m.role === 'caregiver' ? 'Caregiver' : 'Parent',
+            roleParent: m.role !== 'caregiver',
+            canRemove: canManage && !!me && m.id !== me.id,
+            armed: s.removeConfirmId === m.id,
+            arm: () => this.setState({ removeConfirmId: m.id }),
+            disarm: () => this.setState({ removeConfirmId: null }),
+            remove: () => this.removeMember(m.id),
+          })),
+          invites: s.invites.map(i => ({
+            email: i.email,
+            roleLabel: i.role === 'caregiver' ? 'Caregiver' : 'Parent',
+            roleParent: i.role !== 'caregiver',
+            // the code is shown once, to the phone that made the invite
+            code: s.inviteCode && s.inviteCodeFor === i.email ? s.inviteCode : null,
+            copyCode: () => this.copyInviteCode(s.inviteCode),
+            revoke: canManage ? () => this.revokeInvite(i.email) : null,
+          })),
+          canInvite: canManage && seats < MAX_MEMBERS,
+          full: canManage && seats >= MAX_MEMBERS,
+          hint: canManage
+            ? 'Up to six grown-ups share one log. Parents can change anything here; caregivers log, run timers, and cover shifts.'
+            : 'Only a parent can invite or remove people. You can log, run timers, and cover shifts.',
+        }
+      })(),
       account: {
         babyName: s.acctBabyName, setBabyName: e => this.setState({ acctBabyName: e.target.value }),
         saveBabyName: this.saveBabyName,
@@ -2002,12 +2265,17 @@ export default class App extends React.Component {
               </div>
 
               <div style={S('display:flex;flex-direction:column;gap:7px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Who else logs?</div>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Invite your partner or a caregiver</div>
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:16px;padding:4px 4px 4px 16px;display:flex;align-items:center;gap:8px')}>
                   <input value={v.inviteField} onChange={v.setInvite} placeholder="katrina@email.com" type="email" style={S('flex:1;min-width:0;background:none;border:none;padding:13px 0;font-size:16px;color:#26231D;outline:none')} />
                   <button type="button" onClick={v.sendInvite} style={S('background:rgba(var(--accent-rgb),0.14);border:none;border-radius:12px;padding:11px 14px;font-family:inherit;font-size:13.5px;font-weight:600;color:#5F6E42;cursor:pointer')}>Invite</button>
                 </div>
-                <div style={S('font-size:12.5px;color:#8C8474;padding-left:2px')}>They see the same log live. No “when did you…” texts.</div>
+                <div style={S('display:flex;gap:6px')}>
+                  {v.inviteRoleChips.map(c => (
+                    <button key={c.key} type="button" onClick={c.onTap} style={S(`flex:1;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:8px 6px;font-family:inherit;font-size:12.5px;font-weight:600;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                  ))}
+                </div>
+                <div style={S('font-size:12.5px;color:#8C8474;padding-left:2px')}>They see the same log live. No “when did you…” texts. Caregivers can log and cover shifts, but can’t change settings.</div>
               </div>
             </div>
 
@@ -2070,9 +2338,9 @@ export default class App extends React.Component {
               {v.incoming && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px 16px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:12px')}>
                   <div style={S('display:flex;align-items:center;gap:10px')}>
-                    <div style={S(`width:34px;height:34px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
+                    <div style={S(`width:34px;height:34px;border-radius:999px;background:${v.requesterColor};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#FCFBF6`)}>{v.requesterInitial}</div>
                     <div style={S('flex:1;display:flex;flex-direction:column;gap:1px')}>
-                      <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.partnerName} is handing off</div>
+                      <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.requesterName} is handing off</div>
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.requestAgo}</div>
                     </div>
                     <Sym style={{ fontSize: 22, color: 'var(--accent)' }}>swap_horiz</Sym>
@@ -2139,9 +2407,9 @@ export default class App extends React.Component {
                 <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px 8px;margin-bottom:12px;display:flex;flex-direction:column;gap:4px')}>
                   <div style={S('display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:6px')}>
                     <div style={S('display:flex;align-items:center;gap:9px')}>
-                      <div style={S(`width:28px;height:28px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
+                      <div style={S(`width:28px;height:28px;border-radius:999px;background:${v.shiftOwnerColor};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#FCFBF6`)}>{v.shiftOwnerInitial}</div>
                       <div style={S('display:flex;flex-direction:column')}>
-                        <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.partnerName}’s shift</div>
+                        <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.shiftOwnerName}’s shift</div>
                         <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>{v.theirShiftSub}</div>
                       </div>
                     </div>
@@ -2206,6 +2474,9 @@ export default class App extends React.Component {
                       <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
                       <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}{e.pending && <PendingDot />}</div>
                     </div>
+                    {e.byChip && (
+                      <div title={'Logged by ' + e.byChip.name} style={S(`width:20px;height:20px;border-radius:999px;background:${e.byChip.color};display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:#FCFBF6;flex-shrink:0`)}>{e.byChip.initial}</div>
+                    )}
                     <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                   </button>
                 ))}
@@ -2275,6 +2546,9 @@ export default class App extends React.Component {
                         <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
                         <div style={S('font-size:11.5px;color:#8C8474')}>{e.sub}{e.pending && <PendingDot />}</div>
                       </div>
+                      {e.byChip && (
+                        <div title={'Logged by ' + e.byChip.name} style={S(`width:20px;height:20px;border-radius:999px;background:${e.byChip.color};display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:#FCFBF6;flex-shrink:0`)}>{e.byChip.initial}</div>
+                      )}
                       <Sym style={{ fontSize: 18, color: 'var(--dim)', flexShrink: 0 }}>chevron_right</Sym>
                     </button>
                   ))}
@@ -2399,23 +2673,144 @@ export default class App extends React.Component {
             </div>
 
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
-              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.primaryBabyName}</div>
-                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
-                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
-                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Name</div>
-                  <input value={v.account.babyName} onChange={v.account.setBabyName} onBlur={v.account.saveBabyName} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} placeholder="Baby" style={S("width:140px;box-sizing:border-box;text-align:right;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+              {v.childrenCard ? (
+                <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
+                  <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>{v.childrenCard.header}</div>
+                  {v.childrenCard.canEdit ? v.childrenCard.rows.map(c => (
+                    <React.Fragment key={c.id}>
+                      <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                        <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
+                        <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Name</div>
+                        <input value={c.name} onChange={c.setName} onBlur={c.saveName} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} placeholder="Baby" style={S("width:140px;box-sizing:border-box;text-align:right;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                      </div>
+                      <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                        <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
+                        <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
+                        <input type="date" value={c.birthdate} onChange={c.setDob} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                      </div>
+                      {!c.primary && (
+                        <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                          <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 210)' }}>visibility</Sym>
+                          <div style={S('flex:1')}>
+                            <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Show {c.plainName} in the app</div>
+                            <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Off tucks them out of the pills — their log stays</div>
+                          </div>
+                          <button type="button" onClick={c.onArchive} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                            <Sym style={{ fontSize: 22, color: c.archived ? 'var(--dim)' : 'var(--accent)' }}>{c.archived ? 'toggle_off' : 'toggle_on'}</Sym>
+                          </button>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  )) : v.childrenCard.rows.map(c => (
+                    <div key={c.id} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
+                      <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>{c.plainName}{c.archived ? ' · hidden' : ''}</div>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:13.5px;color:#26231D")}>{c.ageText}</div>
+                    </div>
+                  ))}
+                  {v.childrenCard.canAdd && (
+                    <>
+                      <button type="button" onClick={v.childrenCard.toggleAdd} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                        <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>person_add</Sym>
+                        <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Add a child</div>
+                        <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>{v.childrenCard.addOpen ? 'expand_less' : 'expand_more'}</Sym>
+                      </button>
+                      {v.childrenCard.addOpen && (
+                        <div style={S('display:flex;flex-direction:column;gap:8px;padding:2px 0 10px 29px')}>
+                          <input placeholder="Their name" value={v.childrenCard.addName} onChange={v.childrenCard.setAddName} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                          <input type="date" value={v.childrenCard.addDob} onChange={v.childrenCard.setAddDob} max={v.today} style={S("width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none;font-family:inherit")} />
+                          <button type="button" onClick={v.childrenCard.submitAdd} className="hov-olive" style={S('align-self:flex-start;height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6')}>{v.childrenCard.addBusy ? 'One sec…' : 'Add them'}</button>
+                          <div style={S('font-size:11.5px;color:#B5AC98;text-wrap:pretty')}>Their birthday keeps feeds, naps and wake windows compared against the right age.</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.childrenCard.hint}</div>
                 </div>
-                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
-                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
-                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
-                  <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+              ) : (
+                <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px')}>
+                  <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>About {v.primaryBabyName}</div>
+                  <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                    <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 80)' }}>child_care</Sym>
+                    <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Name</div>
+                    <input value={v.account.babyName} onChange={v.account.setBabyName} onBlur={v.account.saveBabyName} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} placeholder="Baby" style={S("width:140px;box-sizing:border-box;text-align:right;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                  </div>
+                  <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                    <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 350)' }}>cake</Sym>
+                    <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Born on</div>
+                    <input type="date" value={v.birthdate} onChange={v.setBirthdate} max={v.today} style={S("background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:8px 10px;font-size:13.5px;color:#26231D;outline:none;font-family:'Nunito',sans-serif;font-weight:600")} />
+                  </div>
+                  <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
                 </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.ageLine}</div>
+              )}
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Your household</div>
+                {v.household.members.map(m => (
+                  <div key={m.id} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                    <div style={S(`width:26px;height:26px;border-radius:999px;background:${m.color};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#FCFBF6;flex-shrink:0`)}>{m.initial}</div>
+                    <div style={S('flex:1;min-width:0;font-size:14px;font-weight:600;color:#4E4A3F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{m.name}{m.isMe ? ' (you)' : ''}</div>
+                    <div style={S(`flex-shrink:0;border-radius:999px;padding:4px 10px;font-family:'Nunito',sans-serif;font-weight:600;font-size:10.5px;background:${m.roleParent ? 'rgba(var(--accent-rgb),0.14)' : 'rgba(38,35,29,0.06)'};color:${m.roleParent ? 'var(--accent-deep)' : '#8C8474'}`)}>{m.roleLabel}</div>
+                    {m.canRemove && !m.armed && (
+                      <button type="button" onClick={m.arm} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Remove</button>
+                    )}
+                    {m.canRemove && m.armed && (
+                      <>
+                        <button type="button" onClick={m.remove} style={S("flex-shrink:0;background:#A85A45;border:none;border-radius:999px;padding:7px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#FCFBF6;cursor:pointer")}>Yes, remove</button>
+                        <button type="button" onClick={m.disarm} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Keep</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+                {v.household.invites.map(i => (
+                  <React.Fragment key={i.email}>
+                    <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: 'var(--soft)' }}>mail</Sym>
+                      <div style={S('flex:1;min-width:0')}>
+                        <div style={S('font-size:14px;font-weight:600;color:#4E4A3F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{i.email}</div>
+                        <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>invited — hasn’t joined yet</div>
+                      </div>
+                      <div style={S(`flex-shrink:0;border-radius:999px;padding:4px 10px;font-family:'Nunito',sans-serif;font-weight:600;font-size:10.5px;background:${i.roleParent ? 'rgba(var(--accent-rgb),0.14)' : 'rgba(38,35,29,0.06)'};color:${i.roleParent ? 'var(--accent-deep)' : '#8C8474'}`)}>{i.roleLabel}</div>
+                      {i.revoke && (
+                        <button type="button" onClick={i.revoke} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#A85A45;cursor:pointer")}>Revoke</button>
+                      )}
+                    </div>
+                    {i.code && (
+                      <div style={S('display:flex;align-items:center;gap:8px;padding:0 0 8px 29px')}>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>Their code</div>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:14px;letter-spacing:0.14em;color:#26231D")}>{i.code}</div>
+                        <button type="button" onClick={i.copyCode} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:5px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:10.5px;color:#8C8474;cursor:pointer")}>Copy</button>
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))}
+                {v.household.canInvite && (
+                  <>
+                    <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>person_add</Sym>
+                      <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Invite your partner or a caregiver</div>
+                    </div>
+                    <div style={S('display:flex;gap:6px;padding:2px 0 8px 29px')}>
+                      {v.inviteRoleChips.map(c => (
+                        <button key={c.key} type="button" onClick={c.onTap} style={S(`flex:1;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:8px 6px;font-family:inherit;font-size:12.5px;font-weight:600;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                      ))}
+                    </div>
+                    <div style={S('display:flex;gap:8px;padding:0 0 8px 29px')}>
+                      <input placeholder="their@email.com" type="email" value={v.inviteField} onChange={v.setInvite} style={S('flex:1;min-width:0;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                      <button type="button" onClick={v.sendInvite} className="hov-olive" style={S('height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6;flex-shrink:0;align-self:center')}>Invite</button>
+                    </div>
+                  </>
+                )}
+                {v.household.full && (
+                  <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>This log is at its six-grown-up limit — remove someone (or revoke an invite) to free a seat.</div>
+                )}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.household.hint}</div>
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Appearance</div>
+                {v.canManage && (
+                <>
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>palette</Sym>
                   <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Accent</div>
@@ -2439,6 +2834,8 @@ export default class App extends React.Component {
                     </button>
                   ))}
                 </div>
+                </>
+                )}
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 300)' }}>dark_mode</Sym>
                   <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Theme</div>
@@ -2458,9 +2855,10 @@ export default class App extends React.Component {
                     <Sym style={{ fontSize: 22, color: v.appearance.tilt.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.tilt.on ? 'toggle_on' : 'toggle_off'}</Sym>
                   </button>
                 </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Colors are shared with your partner. Theme and tilt stay on this phone.</div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.canManage ? 'Colors are shared with your partner. Theme and tilt stay on this phone.' : 'Theme and tilt stay on this phone — colors are the household’s, set by a parent.'}</div>
               </div>
 
+              {v.canManage && (
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Now screen cards</div>
                 {v.widgetRows.map((r, i) => (
@@ -2474,7 +2872,9 @@ export default class App extends React.Component {
                 ))}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>These are the “time since last …” cards at the top of Now. Only things you track can appear here.</div>
               </div>
+              )}
 
+              {v.canManage && (
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>What you track</div>
                 {v.trackRows.map(r => (
@@ -2496,7 +2896,9 @@ export default class App extends React.Component {
                 ))}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:8px;text-wrap:pretty')}>Feeds are always on. Turning something off hides it for both of you — old entries stay, and it all comes back if you switch it on again.</div>
               </div>
+              )}
 
+              {v.canManage && (
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Units</div>
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
@@ -2510,6 +2912,7 @@ export default class App extends React.Component {
                 </div>
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Shared with your partner. The whole log converts either way — nothing to re-enter.</div>
               </div>
+              )}
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Notifications</div>
@@ -2649,9 +3052,6 @@ export default class App extends React.Component {
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Your name is what your partner sees on duty and handoffs.</div>
               </div>
 
-              {v.invitePending && (
-                <div style={S('text-align:center;padding:14px 0 0;font-size:12.5px;color:#B5AC98;text-wrap:pretty')}>{v.inviteMailed ? 'Invite emailed to ' + v.invitePending : 'Invite waiting for ' + v.invitePending} — they sign up with that email{v.inviteCode ? ' and code ' + v.inviteCode : ''} and land here.</div>
-              )}
               <div style={S('text-align:center;padding:16px 0 0')}>
                 <button type="button" onClick={v.logout} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:8px 15px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Log out</button>
               </div>
@@ -2835,8 +3235,8 @@ export default class App extends React.Component {
                 <>
                   <div style={S('display:flex;align-items:center;justify-content:center;gap:14px;padding:6px 0 14px')}>
                     <div style={S('display:flex;flex-direction:column;align-items:center;gap:6px')}>
-                      <div style={S(`width:56px;height:56px;border-radius:999px;background:${PARTNER_COLOR};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.partnerInitial}</div>
-                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{v.partnerName}</div>
+                      <div style={S(`width:56px;height:56px;border-radius:999px;background:${v.relieveColor};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#FCFBF6`)}>{v.relieveInitial}</div>
+                      <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>{v.relieveName}</div>
                     </div>
                     <Sym style={{ fontSize: 28, color: 'var(--faint)', marginBottom: 22 }}>arrow_forward</Sym>
                     <div style={S('display:flex;flex-direction:column;align-items:center;gap:6px')}>
@@ -2844,7 +3244,7 @@ export default class App extends React.Component {
                       <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#6E6659")}>You</div>
                     </div>
                   </div>
-                  <div style={S("text-align:center;font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Take over from {v.partnerName}</div>
+                  <div style={S("text-align:center;font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Take over from {v.relieveName}</div>
                   <div style={S('text-align:center;font-size:13.5px;color:#8C8474;padding-top:4px')}>{v.theirShiftLine}</div>
 
                   <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px;margin-top:18px')}>
@@ -2884,7 +3284,7 @@ export default class App extends React.Component {
                     <Sym style={{ fontSize: 22, color: 'var(--on-accent)' }}>check</Sym>
                     <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>I’ve got him — start my shift</div>
                   </button>
-                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px')}>{v.partnerName} gets a “you’re covered” ping and can sleep.</div>
+                  <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px')}>{v.relieveName} gets a “you’re covered” ping and can sleep.</div>
                 </>
               )}
 
@@ -2906,17 +3306,17 @@ export default class App extends React.Component {
                     ))}
                   </div>
                   <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:12px 16px;margin-top:10px;display:flex;flex-direction:column;gap:8px')}>
-                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Note for {v.partnerName}</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474")}>Note for {v.hbName}</div>
                     <input value={v.handbackNote} onChange={v.setHandbackNote} placeholder="e.g. took the 1am bottle slow, fell asleep on me" style={S('width:100%;box-sizing:border-box;background:rgba(38,35,29,0.04);border:none;border-radius:12px;padding:12px 13px;font-size:14.5px;color:#26231D;outline:none')} />
                   </div>
                   <button type="button" onClick={v.handBack} className="hov-olive" style={S('margin-top:14px;width:100%;height:62px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(var(--accent-rgb),0.3)')}>
                     <Sym style={{ fontSize: 22, color: 'var(--on-accent)' }}>swap_horiz</Sym>
-                    <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>Hand back to {v.partnerName}</div>
+                    <div style={S('font-size:16.5px;font-weight:700;color:#FCFBF6')}>Hand back to {v.hbName}</div>
                   </button>
                   {v.canRequest && (
                     <button type="button" onClick={v.requestHandoff} className="hov-dim" style={S("margin-top:10px;width:100%;background:none;border:none;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#5F6E42;padding:6px 0")}>
                       <Sym style={{ fontSize: 16, color: 'var(--accent-text)' }}>notifications</Sym>
-                      Ask {v.partnerName} to take over — sends your note
+                      {v.askLabel}
                     </button>
                   )}
                   <div style={S('text-align:center;font-size:12px;color:#8C8474;padding-top:10px;text-wrap:pretty')}>They get this summary as a card — no scrolling the log, no “when did you…”</div>
