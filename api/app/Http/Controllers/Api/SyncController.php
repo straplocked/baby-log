@@ -141,6 +141,8 @@ class SyncController extends Controller
             'theme' => ['sometimes', 'nullable', 'array'],
             'theme.accent' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_ACCENTS)],
             'theme.bg' => ['sometimes', 'string', 'in:'.implode(',', self::THEME_BGS)],
+            // display unit only — entry amounts are stored and synced in oz regardless
+            'unit' => ['sometimes', 'string', 'in:oz,ml'],
         ]);
 
         $household = $request->user()->household;
@@ -160,6 +162,9 @@ class SyncController extends Controller
         }
         if (is_array($data['theme'] ?? null)) {
             $settings['theme'] = array_intersect_key($data['theme'], array_flip(['accent', 'bg']));
+        }
+        if (array_key_exists('unit', $data)) {
+            $settings['unit'] = $data['unit'];
         }
         $household->update(['settings' => $settings]);
 

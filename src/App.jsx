@@ -70,11 +70,22 @@ const DUR_LADDER = (() => {
 })()
 // ounces run in halves — the same 0.5 steps the old chip row offered, just scrubbable
 const OZ_LADDER = Array.from({ length: 24 }, (_, i) => (i + 1) / 2)
+// ml runs in 10s and spans the same range as the oz ladder (~⅓–12 oz)
+const ML_LADDER = Array.from({ length: 36 }, (_, i) => (i + 1) * 10)
+// ── units: amounts are STORED AND SYNCED IN OZ, always ──────────────────────
+// The household 'unit' setting only changes what people see and type; ml
+// exists at the edges (chips + display) and converts right back to oz.
+const ML_PER_OZ = 29.5735
+// display: nearest 5 ml reads like the nursery convention (4 oz → 120, not 118.294)
+const ozToMl = oz => Math.round(oz * ML_PER_OZ / 5) * 5
+// storage: back to oz at 2 decimals — 120 ml → 4.06 oz → 120 ml round-trips
+const mlToOz = ml => Math.round(ml / ML_PER_OZ * 100) / 100
 // every scrubbable chip kind: a few tap presets, and the ladder a drag walks along
 const SCRUB = {
-  dur:  { presets: [30, 45, 90], ladder: DUR_LADDER },
-  mins: { presets: [10, 20, 30], ladder: DUR_LADDER },
-  oz:   { presets: [3, 4, 5],    ladder: OZ_LADDER },
+  dur:  { presets: [30, 45, 90],      ladder: DUR_LADDER },
+  mins: { presets: [10, 20, 30],      ladder: DUR_LADDER },
+  oz:   { presets: [3, 4, 5],         ladder: OZ_LADDER },
+  ml:   { presets: [90, 120, 150],    ladder: ML_LADDER }, // the oz presets' conventional twins
 }
 const ladderIdx = (ladder, v) => {
   let best = 0
@@ -333,7 +344,7 @@ export default class App extends React.Component {
       }
       // server settings win unless a local toggle is still waiting to push
       if (!s.settingsDirty && st.settings && !Array.isArray(st.settings)) {
-        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null, ...(st.settings.theme ? { theme: st.settings.theme } : {}) }
+        next.settings = { tracking: st.settings.tracking || {}, dismissed: st.settings.dismissed || [], widgets: st.settings.widgets || null, ...(st.settings.theme ? { theme: st.settings.theme } : {}), ...(st.settings.unit ? { unit: st.settings.unit } : {}) }
       }
       if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
       if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
@@ -544,10 +555,15 @@ export default class App extends React.Component {
     const diff = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / DAY)
     return diff === 0 ? '' : diff === 1 ? 'Yesterday' : diff + ' days ago'
   }
-  unit() { return this.props.unit ?? 'oz' }
+  unit() { return this.state.settings.unit ?? this.props.unit ?? 'oz' }
+  // stored oz → the display unit's number; oz passes through untouched so the
+  // current formatting survives. Every place an amount RENDERS goes through here.
+  amt(oz) { return oz == null ? oz : this.unit() === 'ml' ? ozToMl(oz) : oz }
+  // sheet amount state lives in the display unit; the wire string stays oz
+  amountKey() { return this.unit() === 'ml' ? 'ml' : 'oz' }
   fmtDetail(d) {
     const { n, mins, side, milk } = dSplit(d), p = []
-    if (n != null) p.push(n + ' ' + this.unit())
+    if (n != null) p.push(this.amt(n) + ' ' + this.unit())
     if (milk) p.push(milk)
     if (side) p.push(side)
     if (mins != null) p.push(this.dur(mins))
@@ -666,6 +682,11 @@ export default class App extends React.Component {
     settings: { ...s.settings, theme: { ...(s.settings.theme || {}), ...patch } },
     settingsDirty: true,
   }), () => this.flushSoon())
+  // household-level like tracking/theme — both parents should read the same numbers
+  setUnit = unit => this.setState(s => ({
+    settings: { ...s.settings, unit },
+    settingsDirty: true,
+  }), () => this.flushSoon())
   // theme mode & tilt are per-phone (fx.js), not household settings — the
   // night-shift parent going dark shouldn't flip their partner's screen
   // note: Android's installed-app status bar follows the OS scheme only
@@ -749,7 +770,7 @@ export default class App extends React.Component {
       const last = this.lastOf(['pump'])
       this.mountSheet({
         editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true,
-        detail: last ? (dSplit(last.detail).n ?? 4) : 4, detail2: mins, timerSide: null,
+        detail: this.amt(last ? (dSplit(last.detail).n ?? 4) : 4), detail2: mins, timerSide: null,
       })
     }
   }
@@ -861,7 +882,7 @@ export default class App extends React.Component {
   }
   defaultDetail(k) {
     const d = T(k).detail
-    if (d === 'amount') { const l = this.lastOf([k]); return l ? (dSplit(l.detail).n ?? 4) : 4 }
+    if (d === 'amount') { const l = this.lastOf([k]); return this.amt(l ? (dSplit(l.detail).n ?? 4) : 4) } // seeds in the display unit
     if (d === 'side') { const l = this.lastOf(['nurse']); return l && dSplit(l.detail).side === 'Left' ? 'Right' : 'Left' }
     if (d === 'dur') return 45
     return null
@@ -910,8 +931,8 @@ export default class App extends React.Component {
   }
   exportLog = () => {
     this.shareCsv(this.exportName('full'), [
-      'Date,Time,Type,Amount (oz),Duration (min),Detail,Logged by',
-      ...this.exportRows().map(r => [r.date, r.time, r.type, r.oz ?? '', r.mins ?? '', csvEsc(r.note), csvEsc(r.by)].join(',')),
+      'Date,Time,Type,Amount (' + this.unit() + '),Duration (min),Detail,Logged by',
+      ...this.exportRows().map(r => [r.date, r.time, r.type, this.amt(r.oz) ?? '', r.mins ?? '', csvEsc(r.note), csvEsc(r.by)].join(',')),
     ])
   }
   exportSummary = () => {
@@ -928,25 +949,29 @@ export default class App extends React.Component {
       if (r.key === 'bath') d.baths++
       if (r.key === 'meds') d.meds++
     }
+    // day totals sum in oz and convert once at the end — no per-row rounding drift
     this.shareCsv(this.exportName('daily'), [
-      'Date,Feeds,Bottle (oz),Nursing (min),Pumped (oz),Wet diapers,Dirty diapers,Sleep (min),Baths,Meds',
+      'Date,Feeds,Bottle (' + this.unit() + '),Nursing (min),Pumped (' + this.unit() + '),Wet diapers,Dirty diapers,Sleep (min),Baths,Meds',
       ...[...days.entries()].map(([date, d]) =>
-        [date, d.feeds, d.oz || '', d.nurseMin || '', d.pumpOz || '', d.wet, d.dirty, d.sleepMin || '', d.baths || '', d.meds || ''].join(',')),
+        [date, d.feeds, d.oz ? this.amt(d.oz) : '', d.nurseMin || '', d.pumpOz ? this.amt(d.pumpOz) : '', d.wet, d.dirty, d.sleepMin || '', d.baths || '', d.meds || ''].join(',')),
     ])
   }
 
   // detail state ↔ wire string: primary (amount/side/duration) in `detail`, extra (milk/minutes) in `detail2`
+  // Amounts sit in the display unit while the sheet is open; the wire string is ALWAYS oz.
   composeDetail(k) {
-    const a = this.state.detail, b = this.state.detail2
+    let a = this.state.detail
+    const b = this.state.detail2
+    if ((k === 'bottle' || k === 'pump') && a != null && a !== '' && this.unit() === 'ml') a = mlToOz(Number(a) || 0)
     if (k === 'bottle') return [a, b].filter(x => x != null && x !== '').join(' ') || null
     if (k === 'nurse' || k === 'pump') return [a, b != null ? b + 'm' : null].filter(x => x != null && x !== '').join(' · ') || null
     return a
   }
   decompose(type, d) {
     const { n, mins, side, milk } = dSplit(d)
-    if (type === 'bottle') return { detail: n, detail2: milk }
+    if (type === 'bottle') return { detail: this.amt(n), detail2: milk }
     if (type === 'nurse') return { detail: side, detail2: mins }
-    if (type === 'pump') return { detail: n, detail2: mins }
+    if (type === 'pump') return { detail: this.amt(n), detail2: mins }
     return { detail: d, detail2: null }
   }
   // every sheet opening routes through here: slide-up entrance (mount off-screen,
@@ -1186,7 +1211,7 @@ export default class App extends React.Component {
     const oz = td.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const todaySummary = [
       td.filter(e => FEEDS.includes(e.type)).length + ' feeds',
-      oz + this.unit(),
+      this.amt(oz) + this.unit(),
       this.trackOn('diapers') ? td.filter(e => DIAPERS.includes(e.type)).length + ' diapers' : null,
     ].filter(Boolean).join(' · ')
 
@@ -1203,7 +1228,7 @@ export default class App extends React.Component {
       const feeds = evs.filter(e => FEEDS.includes(e.type))
       const dOz = feeds.reduce((a, e) => a + (e.type === 'bottle' ? dSplit(e.detail).n || 0 : 0), 0)
       const p = [feeds.length + ' feeds']
-      if (dOz) p.push(dOz + ' ' + this.unit())
+      if (dOz) p.push(this.amt(dOz) + ' ' + this.unit())
       const dSl = evs.filter(e => e.type === 'sleep').reduce((a, e) => a + (Number(e.detail) || 0), 0)
       if (this.trackOn('sleep') && dSl) p.push(this.dur(dSl) + ' sleep')
       const dDia = evs.filter(e => DIAPERS.includes(e.type)).length
@@ -1248,7 +1273,7 @@ export default class App extends React.Component {
       if (cur != null && !vals.includes(cur)) vals.push(cur)
       vals.sort((a, b) => a - b)
       const drag = s.scrubDrag && s.scrubDrag.field === field ? s.scrubDrag : null
-      const fmt = v => key === 'oz' ? v + ' ' + this.unit() : this.dur(v)
+      const fmt = v => key === 'oz' || key === 'ml' ? v + ' ' + this.unit() : this.dur(v)
       return vals.map(dv => {
         const dragging = !!drag && drag.base === dv
         const on = dragging || (!drag && cur === dv)
@@ -1258,7 +1283,7 @@ export default class App extends React.Component {
     }
     const opts = kind === 'side' ? ['Left', 'Right', 'Both'].map(v => ({ v, label: v })) : []
     const detailOptions = kind === 'dur' ? scrubChips('detail', 'dur')
-      : kind === 'amount' ? scrubChips('detail', 'oz')
+      : kind === 'amount' ? scrubChips('detail', this.amountKey())
       : opts.map(o => ({ label: o.label, onTap: () => this.setState({ detail: o.v }), ...this.chip(s.detail === o.v, st.color) }))
     const kind2 = st.key === 'bottle' ? 'milk' : st.key === 'nurse' || st.key === 'pump' ? 'mins' : null
     const opts2 = kind2 === 'milk' ? [{ v: 'breastmilk', label: 'Breast milk' }, { v: 'formula', label: 'Formula' }] : []
@@ -1304,7 +1329,7 @@ export default class App extends React.Component {
     const longest = gaps.length ? Math.max(...gaps) : 0
     const stats = [
       { label: 'Feeds / day', value: (feedsWk.length / 7).toFixed(1), unit: 'avg' },
-      { label: this.unit() + ' / day', value: Math.round(ozWk / 7), unit: 'bottles only' },
+      { label: this.unit() + ' / day', value: Math.round(this.amt(ozWk / 7)), unit: 'bottles only' },
       ...(this.trackOn('diapers') ? [{ label: 'Diapers / day', value: (week.filter(e => DIAPERS.includes(e.type)).length / 7).toFixed(1), unit: 'avg' }] : []),
       ...(this.trackOn('sleep') ? [
         { label: 'Sleep logged', value: this.dur(Math.round(naps.reduce((a, e) => a + (Number(e.detail) || 0), 0) / 7)), unit: '/ day' },
@@ -1369,7 +1394,7 @@ export default class App extends React.Component {
     const sOz = sf.filter(e => e.type === 'bottle').reduce((a, e) => a + (dSplit(e.detail).n || 0), 0)
     const reportRows = [
       { label: 'Feeds', value: sf.length ? sf.length + ' · ' + sf.map(e => this.clock(e.t)).join(', ') : 'none yet' },
-      { label: 'Total from bottles', value: sOz + ' ' + this.unit() },
+      { label: 'Total from bottles', value: this.amt(sOz) + ' ' + this.unit() },
       ...(this.trackOn('diapers') ? [{ label: 'Diapers', value: sd.length ? sd.length + ' · ' + sd.map(e => e.type).join(', ') : 'none yet' }] : []),
       ...(this.trackOn('sleep') ? [{ label: 'Sleep logged', value: ss.length ? this.dur(ss.reduce((a, e) => a + (Number(e.detail) || 0), 0)) : 'none yet' }] : []),
       { label: 'Last thing', value: shiftEntries.length ? T(shiftEntries[shiftEntries.length - 1].type).label + ' · ' + this.clock(shiftEntries[shiftEntries.length - 1].t) : '—' },
@@ -1580,6 +1605,10 @@ export default class App extends React.Component {
           setQuietEnd: e => e.target.value && this.setNotify({ quietEnd: e.target.value }),
         }
       })(),
+      unitChips: ['oz', 'ml'].map(u => ({
+        key: u, label: u, on: this.unit() === u, onTap: () => this.setUnit(u),
+      })),
+      unitWord: this.unit() === 'ml' ? 'millilitres' : 'ounces',
       trackRows: TRACKS.map(tr => {
         const on = this.trackOn(tr.key), tt = T(tr.types[0])
         return { label: tr.label, icon: tt.icon, color: tt.color,
@@ -2234,6 +2263,20 @@ export default class App extends React.Component {
               </div>
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Units</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 250)' }}>local_drink</Sym>
+                  <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Bottle & pump amounts</div>
+                </div>
+                <div style={S('display:flex;gap:8px;padding:2px 0 8px 29px')}>
+                  {v.unitChips.map(u => (
+                    <button key={u.key} type="button" onClick={u.onTap} className={u.on ? undefined : 'hov-bd'} style={S(`flex:1;height:34px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;background:${u.on ? 'rgba(var(--accent-rgb),0.16)' : 'var(--surface)'};border:1px solid ${u.on ? 'var(--accent)' : 'rgba(var(--ink-rgb),0.12)'};color:${u.on ? 'var(--accent-deep)' : 'var(--muted)'}`)}>{u.label}</button>
+                  ))}
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Shared with your partner. The whole log converts either way — nothing to re-enter.</div>
+              </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Notifications</div>
                 <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>notifications_active</Sym>
@@ -2297,7 +2340,7 @@ export default class App extends React.Component {
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 130)' }}>calendar_month</Sym>
                   <div style={S('flex:1;min-width:0')}>
                     <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Daily summary</div>
-                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Feeds, ounces, diapers & sleep per day</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Feeds, {v.unitWord}, diapers & sleep per day</div>
                   </div>
                   <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>ios_share</Sym>
                 </button>
