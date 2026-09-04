@@ -1,4 +1,4 @@
-# Baby Log API
+# mybabynotes API
 
 Follow the root [CLAUDE.md](../CLAUDE.md) — it is the source of truth. Do NOT install PHP or Composer on the host, and do not install Laravel Boost.
 
