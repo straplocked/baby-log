@@ -102,8 +102,13 @@ const PARTNER_COLOR = 'var(--accent)'
 // The first two slots are the classic me/partner pair; extras walk the type
 // color hue ladder. JS style objects bypass S(), so vars/oklch only here.
 const MEMBER_COLORS = [ME_COLOR, PARTNER_COLOR, 'oklch(0.60 0.075 300)', 'oklch(0.60 0.075 60)', 'oklch(0.60 0.075 195)', 'oklch(0.60 0.075 350)']
-// mirrors config('babylog.max_household_users') — the invite row hides when full
+// old-server fallbacks only — /state's `limits` key is the live source of
+// truth (maxMembers/maxChildren); these match the config defaults it mirrors
 const MAX_MEMBERS = 6
+const MAX_CHILDREN = 10
+// caps read as words in prose while they stay small ("six grown-ups");
+// anything past ten falls back to digits
+const spellCount = n => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'][n] || String(n)
 
 // ── household theme (accent + background) ────────────────────────────────────
 // Every accent keeps olive's exact oklch lightness/chroma ladder (main ≈0.61/0.073,
@@ -173,7 +178,10 @@ const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'invi
   // the cached inviteCode belongs to (codes are shown once, only to the inviter).
   // inviteRole rides with inviteField so a reload mid-invite can't silently
   // downgrade a chosen caregiver seat back to parent
-  'invites', 'inviteCodeFor', 'inviteRole']
+  'invites', 'inviteCodeFor', 'inviteRole',
+  // server caps + removed-member name snapshots — cached like members so a
+  // reload before the next pull still greys buttons and names old entries
+  'limits', 'formerMembers']
 
 function loadSaved() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null } catch { return null }
@@ -223,6 +231,7 @@ export default class App extends React.Component {
       me: null, partner: null, invitePending: null,
       children: [], members: [], selectedChildId: null, sheetChildId: null,
       invites: [], inviteRole: 'parent', inviteCodeFor: null,
+      limits: null, formerMembers: [], // /state extras; constants/no-names until a new server answers
       // settings management UI — ephemeral, like the acct* fields
       childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', childBusy: false, removeConfirmId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
@@ -386,6 +395,10 @@ export default class App extends React.Component {
         invites: st.invites || [],
         onDutyUserId: st.onDutyUserId, serverShift: st.shift,
         lastSync: st.serverTime,
+        // server caps + removed-member snapshots; an old server sends neither,
+        // so the cached values (or the constant fallbacks) keep applying
+        ...(st.limits ? { limits: { maxMembers: Number(st.limits.maxMembers) || MAX_MEMBERS, maxChildren: Number(st.limits.maxChildren) || MAX_CHILDREN } } : {}),
+        ...(st.formerMembers ? { formerMembers: st.formerMembers } : {}),
       }
       // a selected child that was removed server-side falls back to primary
       if (s.selectedChildId != null && !next.children.some(c => c.id === s.selectedChildId)) next.selectedChildId = null
@@ -483,18 +496,24 @@ export default class App extends React.Component {
     } catch { this.setState({ offline: true }) }
   }
 
-  sendInvite = async () => {
-    const email = this.state.inviteField.trim()
+  // the form invites whoever's typed; a pending row's Resend re-invites itself
+  sendInvite = () => this.sendInviteTo(this.state.inviteField.trim(), this.state.inviteRole)
+
+  // shared invite/resend flow — the server upserts the row and mints a fresh
+  // code (codes are stored hashed, so the old one can't be re-shown; the new
+  // one invalidates it, same as re-typing the email always did)
+  sendInviteTo = async (email, role) => {
     if (!email) return
     try {
-      const r = await api.invite(email, this.state.inviteRole)
+      const r = await api.invite(email, role)
       this.setState(s => ({
         invitePending: email, inviteCode: r.code, inviteCodeFor: email.toLowerCase(), inviteMailed: !!r.mailed,
         // optimistic row until the next pull brings the server's list
         invites: s.invites.some(i => i.email === email.toLowerCase())
-          ? s.invites.map(i => i.email === email.toLowerCase() ? { ...i, role: s.inviteRole } : i)
-          : [...s.invites, { email: email.toLowerCase(), role: s.inviteRole }],
-        inviteField: '',
+          ? s.invites.map(i => i.email === email.toLowerCase() ? { ...i, role } : i)
+          : [...s.invites, { email: email.toLowerCase(), role }],
+        // a resend must not eat whatever's half-typed in the invite field
+        inviteField: s.inviteField.trim() === email ? '' : s.inviteField,
         toast: r.mailed ? 'Emailed ' + email + ' — their code is ' + r.code : 'Invited ' + email + ' — their code is ' + r.code,
         undoAction: null,
       }))
@@ -565,6 +584,7 @@ export default class App extends React.Component {
       entries: [], outbox: [], lastSync: 0, me: null, partner: null, invitePending: null, inviteCode: null, inviteMailed: false,
       children: [], members: [], selectedChildId: null, sheetChildId: null,
       invites: [], inviteRole: 'parent', inviteCodeFor: null,
+      limits: null, formerMembers: [],
       childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', childBusy: false, removeConfirmId: null,
       onDutyUserId: null, serverShift: null, dismissedShiftId: null,
       babyName: '', nameField: '', inviteField: '', sheet: false, sheetIn: false, sheetLeaving: false,
@@ -648,18 +668,31 @@ export default class App extends React.Component {
   // caregivers log, run timers, and cover shifts; only parents shape the
   // household — the server 403s them, this just keeps the controls honest
   isParent() { return (this.state.me?.role || 'parent') === 'parent' }
-  // members includes me; me/partner are the pre-sync fallbacks for old caches
+  // seat/child caps: the server's /state limits when it sends them, the
+  // mirrored constants when it's an old server that doesn't
+  maxMembers() { return this.state.limits?.maxMembers || MAX_MEMBERS }
+  maxChildren() { return this.state.limits?.maxChildren || MAX_CHILDREN }
+  // members includes me; me/partner are the pre-sync fallbacks for old caches;
+  // formerMembers last, so removed people still put a name to their entries
   memberById(id) {
     if (id == null) return null
-    const { me, partner, members } = this.state
+    const { me, partner, members, formerMembers } = this.state
     return members.find(m => m.id === id)
       || (me && me.id === id ? me : null)
       || (partner && partner.id === id ? partner : null)
+      || (formerMembers || []).find(m => m.id === id)
+      || null
   }
   memberName(id, fallback) { const m = this.memberById(id); return (m && m.name) || fallback }
   memberColor(id) {
     const i = this.state.members.findIndex(m => m.id === id)
-    return i >= 0 ? MEMBER_COLORS[i % MEMBER_COLORS.length] : PARTNER_COLOR
+    if (i >= 0) return MEMBER_COLORS[i % MEMBER_COLORS.length]
+    // former members: a deterministic palette pick by id (stable on every
+    // device, no list position to shift), dimmed toward the surface so a
+    // gone member's chip reads quieter than a live one
+    if ((this.state.formerMembers || []).some(m => m.id === id))
+      return `color-mix(in srgb, ${MEMBER_COLORS[id % MEMBER_COLORS.length]} 65%, var(--surface))`
+    return PARTNER_COLOR
   }
 
   // ── children management (settings; parents only — server enforces too) ─────
@@ -1137,7 +1170,8 @@ export default class App extends React.Component {
   // ── provider export: CSV through the native share sheet (download fallback) ─
   exportRows() {
     const who = {}
-    for (const u of [this.state.me, this.state.partner, ...(this.state.members || [])]) if (u) who[u.id] = u.name || ''
+    // former members first, so a live member's row wins if an id ever repeats
+    for (const u of [...(this.state.formerMembers || []), this.state.me, this.state.partner, ...(this.state.members || [])]) if (u) who[u.id] = u.name || ''
     const pad = n => String(n).padStart(2, '0')
     // range chips: 7/30 count back from local midnight so "7 days" means the
     // bars' window (today + 6 before), 'all' is everything on the device
@@ -2029,7 +2063,7 @@ export default class App extends React.Component {
         return {
           header: all.length > 1 ? 'Children' : 'About ' + (all[0].name || 'Baby'),
           canEdit,
-          canAdd: canEdit && all.length < 10, // mirrors config('babylog.max_children')
+          canAdd: canEdit && all.length < this.maxChildren(), // server cap from /state limits
           rows: all.map((c, i) => ({
             id: c.id, primary: i === 0, archived: !!c.archived,
             name: s.childEdits[c.id] ?? c.name ?? '',
@@ -2081,12 +2115,15 @@ export default class App extends React.Component {
             // the code is shown once, to the phone that made the invite
             code: s.inviteCode && s.inviteCodeFor === i.email ? s.inviteCode : null,
             copyCode: () => this.copyInviteCode(s.inviteCode),
+            // resend = re-invite: the fresh code lands on this phone and kills the old one
+            resend: canManage ? () => this.sendInviteTo(i.email, i.role) : null,
             revoke: canManage ? () => this.revokeInvite(i.email) : null,
           })),
-          canInvite: canManage && seats < MAX_MEMBERS,
-          full: canManage && seats >= MAX_MEMBERS,
+          canInvite: canManage && seats < this.maxMembers(),
+          full: canManage && seats >= this.maxMembers(),
+          capWord: spellCount(this.maxMembers()),
           hint: canManage
-            ? 'Up to six grown-ups share one log. Parents can change anything here; caregivers log, run timers, and cover shifts.'
+            ? 'Up to ' + spellCount(this.maxMembers()) + ' grown-ups share one log. Parents can change anything here; caregivers log, run timers, and cover shifts.'
             : 'Only a parent can invite or remove people. You can log, run timers, and cover shifts.',
         }
       })(),
@@ -2773,6 +2810,9 @@ export default class App extends React.Component {
                         <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>invited — hasn’t joined yet</div>
                       </div>
                       <div style={S(`flex-shrink:0;border-radius:999px;padding:4px 10px;font-family:'Nunito',sans-serif;font-weight:600;font-size:10.5px;background:${i.roleParent ? 'rgba(var(--accent-rgb),0.14)' : 'rgba(38,35,29,0.06)'};color:${i.roleParent ? 'var(--accent-deep)' : '#8C8474'}`)}>{i.roleLabel}</div>
+                      {i.resend && (
+                        <button type="button" onClick={i.resend} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Resend</button>
+                      )}
                       {i.revoke && (
                         <button type="button" onClick={i.revoke} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#A85A45;cursor:pointer")}>Revoke</button>
                       )}
@@ -2804,7 +2844,7 @@ export default class App extends React.Component {
                   </>
                 )}
                 {v.household.full && (
-                  <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>This log is at its six-grown-up limit — remove someone (or revoke an invite) to free a seat.</div>
+                  <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>This log is at its {v.household.capWord}-grown-up limit — remove someone (or revoke an invite) to free a seat.</div>
                 )}
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.household.hint}</div>
               </div>
