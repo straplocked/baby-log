@@ -1,9 +1,12 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "straplocked/baby-log-api",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "Baby Log API — sync, shifts, timers, and push for a two-parent baby log.",
+    "keywords": [
+        "laravel",
+        "framework"
+    ],
     "license": "AGPL-3.0-only",
     "require": {
         "php": "^8.3",
