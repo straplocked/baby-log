@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Mail\PartnerInvite;
 use App\Mail\PasswordResetLink;
+use App\Models\Invite;
 use App\Models\Shift;
 use App\Models\User;
 use App\Services\PushService;
@@ -63,11 +64,111 @@ class BabylogApiTest extends TestCase
 
     public function test_full_household_cannot_invite_a_third(): void
     {
+        config(['babylog.max_household_users' => 2]);
         $ben = $this->register('Ben', 'ben@example.com')->json('token');
         $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
         $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->assertCreated();
 
         $this->postJson('/api/invite', ['email' => 'third@example.com'], $this->authed($ben))->assertStatus(422);
+    }
+
+    public function test_pending_invites_count_against_the_cap(): void
+    {
+        config(['babylog.max_household_users' => 2]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->assertOk();
+
+        // one member + one outstanding invite = both seats spoken for
+        $this->postJson('/api/invite', ['email' => 'third@example.com'], $this->authed($ben))->assertStatus(422);
+
+        // re-inviting the same email just regenerates the code — no extra seat
+        $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->assertOk();
+        $this->assertSame(1, Invite::count());
+    }
+
+    public function test_registration_rechecks_capacity_when_the_log_filled_after_the_invite(): void
+    {
+        config(['babylog.max_household_users' => 3]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $codeKat = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $codeDoula = $this->postJson('/api/invite', ['email' => 'doula@example.com'], $this->authed($ben))->json('code');
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $codeKat])->assertCreated();
+
+        // the log shrank (self-hoster lowered the cap) after the invite went out
+        config(['babylog.max_household_users' => 2]);
+        $this->postJson('/api/register', ['name' => 'Doula', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $codeDoula])
+            ->assertStatus(422);
+        $this->assertSame(2, User::count());
+    }
+
+    public function test_a_third_member_joins_via_invite_and_appears_in_the_household(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $codeKat = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $codeKat])->assertCreated();
+
+        $codeDoula = $this->postJson('/api/invite', ['email' => 'doula@example.com'], $this->authed($ben))->json('code');
+        $doula = $this->postJson('/api/register', ['name' => 'Robin', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $codeDoula])
+            ->assertCreated()->json('token');
+
+        // all three share one household, and the newcomer converges on its state
+        $this->assertSame(3, User::count());
+        $this->assertSame(1, User::distinct()->count('household_id'));
+        $this->assertSame('Ben', $this->getJson('/api/state', $this->authed($doula))->json('partner.name'));
+    }
+
+    public function test_two_concurrent_invites_to_different_emails_both_work(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $codeKat = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $codeDoula = $this->postJson('/api/invite', ['email' => 'doula@example.com'], $this->authed($ben))->json('code');
+
+        // both seats are pending at once; old clients still see the first one
+        $this->assertSame(2, Invite::count());
+        $this->assertSame('katrina@example.com', $this->getJson('/api/state', $this->authed($ben))->json('invitePending'));
+
+        $this->postJson('/api/register', ['name' => 'Robin', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $codeDoula])->assertCreated();
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $codeKat])->assertCreated();
+        $this->assertSame(3, User::count());
+        $this->assertSame(0, Invite::count());
+    }
+
+    public function test_invite_code_is_single_use(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->assertCreated();
+
+        // the seat is taken: the invite row is gone, and the burned code opens no doors
+        $this->assertSame(0, Invite::count());
+        $this->postJson('/api/register', ['name' => 'Mallory', 'email' => 'mallory@example.com', 'password' => 'password123', 'invite' => $code])->assertStatus(422);
+        $this->assertSame(2, User::count());
+    }
+
+    public function test_an_invite_can_carry_the_caregiver_role(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'doula@example.com', 'role' => 'caregiver'], $this->authed($ben))->json('code');
+        $this->postJson('/api/register', ['name' => 'Robin', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $code])->assertCreated();
+
+        $this->assertSame('caregiver', User::where('email', 'doula@example.com')->sole()->role);
+        $this->assertSame('parent', User::where('email', 'ben@example.com')->sole()->role);
+    }
+
+    public function test_invite_rejects_an_unknown_role(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $this->postJson('/api/invite', ['email' => 'doula@example.com', 'role' => 'admin'], $this->authed($ben))->assertStatus(422);
+    }
+
+    public function test_a_caregiver_cannot_invite(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'doula@example.com', 'role' => 'caregiver'], $this->authed($ben))->json('code');
+        $doula = $this->postJson('/api/register', ['name' => 'Robin', 'email' => 'doula@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $this->postJson('/api/invite', ['email' => 'friend@example.com'], $this->authed($doula))->assertStatus(403);
+        $this->assertSame(0, Invite::count());
     }
 
     public function test_short_passwords_are_rejected(): void

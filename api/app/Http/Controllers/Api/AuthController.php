@@ -6,6 +6,7 @@ use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
 use App\Mail\PasswordResetLink;
 use App\Models\Household;
+use App\Models\Invite;
 use App\Models\User;
 use App\Support\AppMail;
 use Illuminate\Http\JsonResponse;
@@ -27,53 +28,54 @@ class AuthController extends Controller
         ]);
         $data['email'] = strtolower($data['email']);
 
-        // an invite to this email drops the new user into their partner's household —
+        // an invite to this email drops the new user into the inviter's household —
         // but only with the single-use code the inviter was shown
-        $invited = Household::where('invite_email', $data['email'])->first();
+        $invite = Invite::where('email', $data['email'])->first();
 
         // invite-only by default: first account or invited emails, nothing else
-        if (! $invited && ! config('babylog.open_registration') && User::count() > 0) {
+        if (! $invite && ! config('babylog.open_registration') && User::count() > 0) {
             throw ValidationException::withMessages([
                 'email' => ['This Baby Log is invite-only. Ask your partner to invite this exact email.'],
             ]);
         }
-        if ($invited) {
+        if ($invite) {
             $code = strtoupper(preg_replace('/[^a-z0-9]/i', '', (string) ($data['invite'] ?? '')));
-            if ($code === '' || ! hash_equals((string) $invited->invite_code_hash, hash('sha256', $code))) {
+            if ($code === '' || ! hash_equals((string) $invite->code_hash, hash('sha256', $code))) {
                 throw ValidationException::withMessages([
                     'invite' => ['Check the invite code your partner was shown when they invited you.'],
                 ]);
             }
-            if ($invited->users()->count() >= config('babylog.max_household_users')) {
+            if ($invite->household->users()->count() >= config('babylog.max_household_users')) {
                 throw ValidationException::withMessages([
-                    'email' => ['That log already has both grown-ups.'],
+                    'email' => ['This log is full.'],
                 ]);
             }
         }
 
-        $household = $invited ?? Household::create();
-        if ($invited) {
-            $invited->update(['invite_email' => null, 'invite_code_hash' => null]);
-        }
+        $household = $invite?->household ?? Household::create();
 
         $user = User::create([
             'name' => $data['name'],
             'email' => $data['email'],
             'password' => $data['password'],
             'household_id' => $household->id,
+            // the invite decides the seat; the first / open-registration account is a parent
+            'role' => $invite?->role ?? 'parent',
         ]);
+
+        $invite?->delete(); // single-use: the seat is taken
 
         if (! $household->on_duty_user_id) {
             $household->update(['on_duty_user_id' => $user->id]);
         }
 
-        if ($invited) {
+        if ($invite) {
             HouseholdTouched::send($household->id, 'partner', toOthers: false);
         }
 
         return response()->json([
             'token' => $user->createToken('app')->plainTextToken,
-            'joinedPartner' => (bool) $invited,
+            'joinedPartner' => (bool) $invite,
         ], 201);
     }
 

@@ -38,7 +38,8 @@ class SyncController extends Controller
         return response()->json([
             'user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'householdId' => $user->household_id, 'notifyPrefs' => $user->notifyPrefs()],
             'partner' => $partner ? ['id' => $partner->id, 'name' => $partner->name] : null,
-            'invitePending' => $household->invite_email,
+            // old clients only know about one pending seat — show them the first
+            'invitePending' => $household->invites()->orderBy('id')->value('email'),
             'baby' => $household->baby ? ['name' => $household->baby->name, 'age' => $household->baby->age_label, 'birthdate' => $household->baby->birthdate] : null,
             'onDutyUserId' => $household->on_duty_user_id,
             'settings' => $household->settings,
@@ -76,32 +77,49 @@ class SyncController extends Controller
 
     public function invite(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'role' => ['sometimes', 'string', 'in:parent,caregiver'],
+        ]);
 
-        $household = $request->user()->household;
-        if ($household->users()->count() >= config('babylog.max_household_users')) {
-            return response()->json(['message' => 'This log already has both grown-ups.'], 422);
+        $user = $request->user();
+        if (! $user->isParent()) {
+            return response()->json(['message' => 'Only a parent can invite people to this log.'], 403);
         }
 
-        // single-use code, shown once to the inviter; the partner enters it at sign-up
+        $household = $user->household;
+        $email = strtolower($data['email']);
+
+        // seats = members + outstanding invites; re-inviting the same email
+        // replaces its row, so that one doesn't count against the cap
+        $pendingOthers = $household->invites()->where('email', '!=', $email)->count();
+        if ($household->users()->count() + $pendingOthers >= config('babylog.max_household_users')) {
+            return response()->json(['message' => 'This log is full.'], 422);
+        }
+
+        // single-use code, shown once to the inviter; the invitee enters it at sign-up
         $code = '';
         $alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
         for ($i = 0; $i < 6; $i++) {
             $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
         }
 
-        $household->update([
-            'invite_email' => strtolower($data['email']),
-            'invite_code_hash' => hash('sha256', $code),
-        ]);
+        $household->invites()->updateOrCreate(
+            ['email' => $email],
+            [
+                'code_hash' => hash('sha256', $code),
+                'role' => $data['role'] ?? 'parent',
+                'invited_by' => $user->id,
+            ],
+        );
 
         // with SMTP configured the invitee also gets the code by email; the
         // on-screen code stays the source of truth either way
         $mailed = false;
         if (AppMail::configured()) {
             try {
-                Mail::to(strtolower($data['email']))->send(new PartnerInvite(
-                    $request->user()->name,
+                Mail::to($email)->send(new PartnerInvite(
+                    $user->name,
                     $household->baby?->name,
                     $code,
                     rtrim((string) config('app.url'), '/'),

@@ -17,10 +17,21 @@ return [
     |--------------------------------------------------------------------------
     | Household size
     |--------------------------------------------------------------------------
-    | Baby Log is built for two grown-ups per log.
+    | How many grown-ups (parents + caregivers) one log holds; pending invites
+    | count against the cap. Six covers two parents plus night nurses, doulas,
+    | and grandparents — raise BABYLOG_MAX_USERS if your village is bigger.
     */
 
-    'max_household_users' => 2,
+    'max_household_users' => env('BABYLOG_MAX_USERS', 6),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Children
+    |--------------------------------------------------------------------------
+    | How many children one household can track.
+    */
+
+    'max_children' => 10,
 
     /*
     |--------------------------------------------------------------------------

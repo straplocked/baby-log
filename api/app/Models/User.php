@@ -13,7 +13,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'household_id', 'notify_prefs', 'notify_state'])]
+#[Fillable(['name', 'email', 'password', 'household_id', 'role', 'notify_prefs', 'notify_state'])]
 #[Hidden(['password', 'remember_token', 'notify_state'])]
 class User extends Authenticatable
 {
@@ -53,6 +53,12 @@ class User extends Authenticatable
             'notify_prefs' => 'array',
             'notify_state' => 'array',
         ];
+    }
+
+    /** Parents run the household; caregivers only log, run timers, and trade shifts. */
+    public function isParent(): bool
+    {
+        return $this->role !== 'caregiver';
     }
 
     public function household(): BelongsTo
