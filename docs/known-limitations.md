@@ -24,7 +24,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 ## Technical debt / release gates
 
-- **Updater tracks `main` unpinned** (user chose this for the testing phase). Before public release: tag versions, default `BABYLOG_REF` to the latest tag, publish tarball checksums.
+- ~~**Updater tracks `main` unpinned** (user chose this for the testing phase). Before public release: tag versions, default `BABYLOG_REF` to the latest tag, publish tarball checksums.~~ Fixed 2026-09-04: `v*` tag pushes run the suite, publish `:vX.Y.Z` + `:latest` images (app/api/aio), and attach a source tarball + sha256 `checksums.txt` to a GitHub Release; `babylog.sh` now defaults to the latest release and verifies the checksum, falling back to `main` only when no release exists or the API is unreachable (`BABYLOG_REF` still overrides).
 - **Community Apps template** not yet written; GHCR images already build on every push. The template should consume images (no on-box builds) — likely needs a compose-based CA entry or an "all-in-one" image variant.
 - `artisan serve` (8 workers) as the production server — fine for 2 users; FPM/Octane if scope grows.
 - ~~**Sanctum tokens never expire**; each login adds a row. Add expiry + pruning eventually.~~ Fixed 2026-09-03: tokens expire after 90 days (`sanctum.expiration`) and `sanctum:prune-expired` reaps week-old expired rows daily via the existing scheduler. Note: expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
