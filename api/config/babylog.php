@@ -28,10 +28,11 @@ return [
     |--------------------------------------------------------------------------
     | Children
     |--------------------------------------------------------------------------
-    | How many children one household can track.
+    | How many children one household can track. Raise BABYLOG_MAX_CHILDREN
+    | if you need more.
     */
 
-    'max_children' => 10,
+    'max_children' => env('BABYLOG_MAX_CHILDREN', 10),
 
     /*
     |--------------------------------------------------------------------------

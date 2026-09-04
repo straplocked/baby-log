@@ -9,9 +9,9 @@ use Illuminate\Support\Collection;
 
 class Household extends Model
 {
-    protected $fillable = ['on_duty_user_id', 'settings', 'active_timer'];
+    protected $fillable = ['on_duty_user_id', 'settings', 'active_timer', 'former_members'];
 
-    protected $casts = ['settings' => 'array', 'active_timer' => 'array'];
+    protected $casts = ['settings' => 'array', 'active_timer' => 'array', 'former_members' => 'array'];
 
     public function users(): HasMany
     {
