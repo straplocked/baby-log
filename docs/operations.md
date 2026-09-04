@@ -88,17 +88,27 @@ Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:
 
 ## CI / images
 
-`.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/baby-log-app` and `…-api` (`:main` + commit SHA).
+`.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/mybabynotes-app` and `…-api` (`:main` + commit SHA).
 
-`.github/workflows/release.yml`: pushing a `v*` tag runs the same test suite, then builds and pushes all three images — `baby-log-app`, `baby-log-api`, and `baby-log-aio` — tagged `:vX.Y.Z` **and** `:latest` (releases own `:latest`; `main` builds never touch it), then creates a GitHub Release with generated notes, a `git archive` source tarball (`baby-log-vX.Y.Z.tar.gz`), and its sha256 in `checksums.txt`. The Unraid updater consumes that tarball + checksum; the images are the basis for the Unraid Community Apps template.
+`.github/workflows/release.yml`: pushing a `v*` tag runs the same test suite, then builds and pushes all three images — `mybabynotes-app`, `mybabynotes-api`, and `mybabynotes-aio` — tagged `:vX.Y.Z` **and** `:latest` (releases own `:latest`; `main` builds never touch it), then creates a GitHub Release with generated notes, a `git archive` source tarball (`mybabynotes-vX.Y.Z.tar.gz`), and its sha256 in `checksums.txt`. The Unraid updater consumes that tarball + checksum; the images are the basis for the Unraid Community Apps template.
+
+### Repo-rename migration (baby-log → mybabynotes) — production checklist
+
+The GitHub repo was renamed `straplocked/baby-log` → `straplocked/mybabynotes` (2026-09-04). GitHub redirects the old repo/raw/tarball URLs, but **GHCR packages do not follow a repo rename** — the image names above are new packages that only come into existence on the next push, and each starts **private**. Until every step below is done, anonymous pulls of the new names fail with a misleading "manifest not found":
+
+1. After the first post-rename push to `main`, flip the new packages public: GitHub → profile → Packages → `mybabynotes-app` and `mybabynotes-api` → Package settings → Danger Zone → Change visibility → Public. (`mybabynotes-aio` appears with the first post-rename `v*` tag — flip it then too.)
+2. The old `baby-log-*` packages stay published under their old names and keep working; leave them until nothing references them, then delete or deprecate.
+3. The `babylog-update` User Script on the NAS is a `curl | sh` of `deploy/unraid/babylog.sh` from the old raw URL. The redirect keeps it working (and the fetched script now carries the new repo/tarball names), but update the User Script's URL to `https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh` — the redirect dies if the old name is ever reused.
+4. Note the compose-based production stack **builds from source on the NAS** (`docker compose up -d --build`) — it never pulls GHCR, so production updates don't depend on package visibility. The visibility flips matter for the CA/all-in-one route and anyone pulling images directly.
+5. Appdata paths (`/mnt/user/appdata/baby-log`), the compose project name (`-p baby-log`), container names (`baby-log-app/api/reverb`), and the `babylog-update`/`babylog-reset-data` script names are **unchanged on purpose** — they point at live state, and renaming the compose project would orphan the running stack.
 
 ## All-in-one image (Community Apps)
 
 [deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` + `/app` ws proxy on port 80), `artisan serve` (8 workers), Reverb, and `schedule:work` running; everything else matches the three-container compose stack.
 
 ```bash
-docker build -f deploy/aio/Dockerfile -t baby-log-aio .        # from the repo root
-docker run -d -p 3500:80 -v /path/to/data:/data baby-log-aio
+docker build -f deploy/aio/Dockerfile -t mybabynotes-aio .        # from the repo root
+docker run -d -p 3500:80 -v /path/to/data:/data mybabynotes-aio
 ```
 
 - **`/data` is the instance**: `database.sqlite` + a `.env` holding the secrets. Back up that volume and you have everything.

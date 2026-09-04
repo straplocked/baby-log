@@ -4,10 +4,10 @@
 # First run:  installs to /mnt/user/appdata/baby-log, generates secrets, starts the stack.
 # Re-run:     pulls the latest release from GitHub and rebuilds. Data survives in ./data.
 #
-#   curl -fsSL https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/babylog.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh | sh
 set -e
 
-REPO="straplocked/baby-log"
+REPO="straplocked/mybabynotes"
 BASE="${BABYLOG_BASE:-/mnt/user/appdata/baby-log}"
 # BABYLOG_GH_API exists so tests can point the release lookup at a stub.
 GH_API="${BABYLOG_GH_API:-https://api.github.com}"
@@ -59,7 +59,7 @@ case "$REF" in
   v*)
     ASSETS="https://github.com/$REPO/releases/download/$REF"
     if curl -fsSL "$ASSETS/checksums.txt" -o checksums.txt 2>/dev/null; then
-      TARBALL="$ASSETS/baby-log-$REF.tar.gz"
+      TARBALL="$ASSETS/mybabynotes-$REF.tar.gz"
       VERIFY=1
     else
       echo "WARNING: release $REF has no checksums.txt — skipping verification"
@@ -73,10 +73,10 @@ echo "==> downloading $REF…"
 curl -fsSL "$TARBALL" -o src.tar.gz
 
 if [ "$VERIFY" = 1 ]; then
-  WANT=$(grep -F "baby-log-$REF.tar.gz" checksums.txt | awk '{print $1}')
+  WANT=$(grep -F "mybabynotes-$REF.tar.gz" checksums.txt | awk '{print $1}')
   GOT=$(sha256sum src.tar.gz | awk '{print $1}')
   if [ -z "$WANT" ] || [ "$GOT" != "$WANT" ]; then
-    echo "ERROR: checksum mismatch for baby-log-$REF.tar.gz (got $GOT, want ${WANT:-nothing})"
+    echo "ERROR: checksum mismatch for mybabynotes-$REF.tar.gz (got $GOT, want ${WANT:-nothing})"
     rm -f src.tar.gz checksums.txt
     exit 1
   fi

@@ -1,18 +1,18 @@
 # Submitting Baby Log to Unraid Community Apps
 
 The template is [deploy/unraid/ca-template.xml](../deploy/unraid/ca-template.xml). It consumes the
-all-in-one image `ghcr.io/straplocked/baby-log-aio:latest` (built by
+all-in-one image `ghcr.io/straplocked/mybabynotes-aio:latest` (built by
 [.github/workflows/release.yml](../.github/workflows/release.yml) on `v*` tag pushes — a `main` push
 does **not** build the AIO image, so a tagged release must exist before the template is useful).
 
 ## Pre-submission checklist
 
 1. **Publish the image.** Push the `v1.0.0` tag; `release.yml` runs the suite, then pushes
-   `baby-log-aio:v1.0.0` and `:latest` to GHCR.
-2. **Make the GHCR package public.** GitHub → your profile → Packages → `baby-log-aio` →
+   `mybabynotes-aio:v1.0.0` and `:latest` to GHCR.
+2. **Make the GHCR package public.** GitHub → your profile → Packages → `mybabynotes-aio` →
    Package settings → Danger Zone → Change visibility → Public. CA users' servers pull
    anonymously; a private package fails with a misleading "manifest not found". Do the same for
-   `baby-log-app` / `baby-log-api` if they aren't already public.
+   `mybabynotes-app` / `mybabynotes-api` if they aren't already public.
 3. **Test the template on a real Unraid box.** Copy `ca-template.xml` to
    `/boot/config/plugins/dockerMan/templates-user/` on the flash share (any filename ending
    `.xml`), then Docker tab → **Add Container** → pick it from the Template dropdown. Verify:
@@ -22,8 +22,8 @@ does **not** build the AIO image, so a tagged release must exist before the temp
    - `/mnt/user/appdata/baby-log` contains `database.sqlite` + `.env` afterwards;
    - stop/start survives (secrets reused, no re-generation).
 4. **Confirm the raw URLs resolve** (they 404 until this branch is on `main`):
-   - `https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/ca-template.xml`
-   - `https://raw.githubusercontent.com/straplocked/baby-log/main/public/icons/icon-512.png`
+   - `https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/ca-template.xml`
+   - `https://raw.githubusercontent.com/straplocked/mybabynotes/main/public/icons/icon-512.png`
 5. **Create the support thread** on the Unraid forums (draft below) so the listing has a
    human-facing support venue alongside the GitHub issues link in `<Support>`.
 
@@ -31,7 +31,7 @@ does **not** build the AIO image, so a tagged release must exist before the temp
 
 CA ingests templates from a GitHub repository registered in its application feed. Two options:
 
-- **In-repo (current setup):** register `https://github.com/straplocked/baby-log` as the template
+- **In-repo (current setup):** register `https://github.com/straplocked/mybabynotes` as the template
   repository. CA scans the repo for `<Container>` XMLs and will find
   `deploy/unraid/ca-template.xml`; `<TemplateURL>` already points at its raw `main` URL, so edits
   land by pushing to `main`.
@@ -123,5 +123,5 @@ URL exists).
 > fit better; this one optimizes for offline logging, live household sync, and the shift handoff.
 > (Switching over? Settings can import a Baby Buddy CSV export.)
 >
-> Source (AGPL): https://github.com/straplocked/baby-log — bugs are best as GitHub issues, but
+> Source (AGPL): https://github.com/straplocked/mybabynotes — bugs are best as GitHub issues, but
 > this thread works too.

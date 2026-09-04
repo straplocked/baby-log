@@ -51,8 +51,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/baby-log-app:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/baby-log-app:latest
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-app:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-app:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build and push api image
@@ -61,8 +61,8 @@ jobs:
           context: ./api
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/baby-log-api:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/baby-log-api:latest
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-api:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build and push aio image
@@ -72,8 +72,8 @@ jobs:
           file: deploy/aio/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/baby-log-aio:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/baby-log-aio:latest
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-aio:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/mybabynotes-aio:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -84,9 +84,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build source tarball + checksums
         run: |
-          git archive --format=tar.gz --prefix="baby-log-${GITHUB_REF_NAME}/" \
-            -o "baby-log-${GITHUB_REF_NAME}.tar.gz" "${GITHUB_REF_NAME}"
-          sha256sum "baby-log-${GITHUB_REF_NAME}.tar.gz" > checksums.txt
+          git archive --format=tar.gz --prefix="mybabynotes-${GITHUB_REF_NAME}/" \
+            -o "mybabynotes-${GITHUB_REF_NAME}.tar.gz" "${GITHUB_REF_NAME}"
+          sha256sum "mybabynotes-${GITHUB_REF_NAME}.tar.gz" > checksums.txt
           cat checksums.txt
       - name: Create GitHub Release
         env:
@@ -94,4 +94,4 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --generate-notes \
-            "baby-log-${GITHUB_REF_NAME}.tar.gz" checksums.txt
+            "mybabynotes-${GITHUB_REF_NAME}.tar.gz" checksums.txt

@@ -43,7 +43,7 @@ If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy �
 
 ### 1. Unraid (Community Apps)
 
-Baby Log ships an all-in-one image (`ghcr.io/straplocked/baby-log-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, so until it appears in the store you can install it manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
+Baby Log ships an all-in-one image (`ghcr.io/straplocked/mybabynotes-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, so until it appears in the store you can install it manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
 
 First boot generates every secret into `/data/.env` — nothing to configure on the LAN. Back up the one appdata folder and you've backed up the app. Pin a version by changing the repository tag from `:latest` to `:v1.0.0`.
 
@@ -52,19 +52,19 @@ First boot generates every secret into `/data/.env` — nothing to configure on 
 For a compose-based install (separate app/api/reverb containers), one command installs *and* updates — requires the *Docker Compose Manager* plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/babylog.sh | sh
+curl -fsSL https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh | sh
 ```
 
 The script resolves the latest tagged release, verifies its tarball against the published `checksums.txt`, and rebuilds; data survives in `appdata/baby-log/data`. Pin or roll back with `BABYLOG_REF`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/straplocked/baby-log/main/deploy/unraid/babylog.sh | BABYLOG_REF=v1.0.0 sh
+curl -fsSL https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh | BABYLOG_REF=v1.0.0 sh
 ```
 
 ### 3. Docker Compose (any server)
 
 ```bash
-git clone https://github.com/straplocked/baby-log && cd baby-log
+git clone https://github.com/straplocked/mybabynotes && cd mybabynotes
 cp .env.example .env    # fill in APP_KEY + REVERB_APP_SECRET (generation commands in the file)
 docker compose up -d --build    # http://localhost:3500
 ```
@@ -83,7 +83,7 @@ docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:
 
 React 18 + Vite PWA · Laravel 13 API (SQLite, Sanctum) · Laravel Reverb websockets · nginx · Docker. Invite-only registration, throttled auth, client-generated entry ids with tombstone-synced deletes, poke-to-pull realtime (the server broadcasts "something changed", never data), computed shift reports, expiring tokens. Details: [docs/architecture.md](docs/architecture.md).
 
-Releases are tagged: a `v*` tag runs the test suite, publishes `ghcr.io/straplocked/baby-log-app`, `baby-log-api`, and `baby-log-aio` images (`:vX.Y.Z` + `:latest`), and attaches a checksummed source tarball to the GitHub Release.
+Releases are tagged: a `v*` tag runs the test suite, publishes `ghcr.io/straplocked/mybabynotes-app`, `mybabynotes-api`, and `mybabynotes-aio` images (`:vX.Y.Z` + `:latest`), and attaches a checksummed source tarball to the GitHub Release.
 
 ## Documentation
 

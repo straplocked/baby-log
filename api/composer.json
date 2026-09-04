@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "straplocked/baby-log-api",
+    "name": "straplocked/mybabynotes-api",
     "type": "project",
     "description": "Baby Log API — sync, shifts, timers, and push for a two-parent baby log.",
     "keywords": [
