@@ -43,7 +43,7 @@ If realtime breaks remotely but works on LAN, check the websocket toggle on the 
 
 ## Registration policy
 
-Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): add `BABYLOG_OPEN_REGISTRATION: "true"` to the api service env in the Unraid compose and re-run the update script.
+Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): append `BABYLOG_OPEN_REGISTRATION=true` to `/mnt/user/appdata/baby-log/.env` (same mechanism as the `MAIL_*` vars in "Enabling email" below) and run **`babylog-update`** once so compose recreates the containers with the new value. Don't hand-edit the deployed compose file — the update script replaces the source tree wholesale on every update, so that edit wouldn't survive.
 
 ## Enabling email (invite mail + password reset)
 
