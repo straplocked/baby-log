@@ -175,7 +175,7 @@ const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'inviteMailed', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
-  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimers', 'timerSides', 'timersInFeed',
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimers', 'timerSides', 'timerSpot',
   // multi-child household: the lists sync via /state; selectedChildId is a
   // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
   'children', 'members', 'selectedChildId',
@@ -231,11 +231,11 @@ export default class App extends React.Component {
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       // concurrent timers (twins!): [{id, type, started_at, user_id, baby_id}]
       // in start order; timerSides remembers each nurse timer's pre-picked side
-      // by timer id. The top-of-Now cards stop in one tap; timersInFeed is a
-      // DEVICE-LOCAL toggle (like selectedChildId) that also weaves running
-      // timers into the Today list, where stopArmId = the row tapped open to
-      // reveal its Stop button
-      activeTimers: [], timerSides: {}, stopArmId: null, timersInFeed: true, manualDur: false,
+      // by timer id. timerSpot is a DEVICE-LOCAL pref (like selectedChildId)
+      // for where running timers appear: 'top' (one-tap-stop cards), 'today'
+      // (rows woven into the Today list, where stopArmId = the row tapped open
+      // to reveal its Stop button), or 'both'
+      activeTimers: [], timerSides: {}, stopArmId: null, timerSpot: 'both', manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
       toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -270,6 +270,8 @@ export default class App extends React.Component {
       this.state.activeTimers = [saved.activeTimer]
       if (saved.timerSide) this.state.timerSides = { [saved.activeTimer.id]: saved.timerSide }
     }
+    // …and the short-lived timersInFeed boolean became timerSpot (off = top-only)
+    if (saved && !('timerSpot' in saved) && saved.timersInFeed === false) this.state.timerSpot = 'top'
     this.state.settings = { tracking: {}, dismissed: [], ...(this.state.settings || {}) }
     // in-flight timer start/stop request counter — while >0 the server's timer
     // list is stale and must not clobber our optimistic rows
@@ -1733,10 +1735,10 @@ export default class App extends React.Component {
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
       pending: pendingIds.has(e.id), byChip: byChipFor(e),
     }))
-    // running timers woven into the Today list at their start time (the
-    // device-local timersInFeed toggle) — a live elapsed sub, and the previous
-    // two-step stop: tapping your own row arms its Stop button
-    const feedTimerRows = s.timersInFeed ? s.activeTimers.map(t => {
+    // running timers woven into the Today list at their start time (timerSpot
+    // 'today' or 'both') — a live elapsed sub, and the previous two-step stop:
+    // tapping your own row arms its Stop button
+    const feedTimerRows = (s.timerSpot || 'both') !== 'top' ? s.activeTimers.map(t => {
       const tt = T(t.type)
       const mine = !!(s.me && t.user_id === s.me.id)
       const child = kids.length > 1
@@ -2060,12 +2062,12 @@ export default class App extends React.Component {
       toManual: () => this.setState({ manualDur: true }),
       toTimer: () => this.setState({ manualDur: false }),
       manualHint: st.key === 'nurse' ? 'Log a past feed' : st.key === 'sleep' ? 'Log a past sleep' : 'Log a past session',
-      // running-timer cards at the top of Now — one per concurrent timer, in
-      // start order so cards stay put as new ones append. With 2+ unarchived
-      // children each names its child (null baby_id = primary, same rule as
-      // entries). These are already running, so your own card stops in ONE tap;
-      // the two-step stop lives on the Today-list rows (timersInFeed).
-      timers: s.activeTimers.map(t => {
+      // running-timer cards at the top of Now (timerSpot 'top' or 'both') —
+      // one per concurrent timer, in start order so cards stay put as new ones
+      // append. With 2+ unarchived children each names its child (null baby_id
+      // = primary, same rule as entries). These are already running, so your
+      // own card stops in ONE tap; the two-step stop lives on the Today rows.
+      timers: ((s.timerSpot || 'both') === 'today' ? [] : s.activeTimers).map(t => {
         const tt = T(t.type)
         return {
           id: t.id,
@@ -2247,9 +2249,11 @@ export default class App extends React.Component {
           key, label, on: (s.fx.mode || 'auto') === key, onTap: () => this.setFxMode(key),
         })),
         tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
-        // device-local like theme/tilt: whether running timers also hold a row
-        // in the Today list (the top-of-Now cards always show)
-        timersFeed: { on: !!s.timersInFeed, onToggle: () => this.setState(x => ({ timersInFeed: !x.timersInFeed })) },
+        // device-local like theme/tilt: where running timers appear — the
+        // one-tap-stop cards up top, rows in the Today list, or both
+        timerSpots: [['top', 'Top'], ['today', 'Today'], ['both', 'Both']].map(([key, label]) => ({
+          key, label, on: (s.timerSpot || 'both') === key, onTap: () => this.setState({ timerSpot: key }),
+        })),
       },
       exportLog: this.exportLog, exportSummary: this.exportSummary,
       importBB: e => this.importBabyBuddy(e.currentTarget), importBusy: s.importBusy,
@@ -2759,7 +2763,10 @@ export default class App extends React.Component {
                 {v.timeline.map((e, i) => e.timer ? (
                   // a running timer holding its place in the day — tap arms the
                   // in-row Stop (the two-step flow); the top card is the one-tap
-                  <div key={'timer-' + e.id} onClick={e.onTap} style={S(`width:100%;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;text-align:left${e.mine ? ';cursor:pointer' : ''}`)}>
+                  // box-sizing matters: entry rows are <button>s (border-box by
+                  // default) but this is a <div>, and without it the padding
+                  // pushes the right-side glyph past the card's overflow:hidden
+                  <div key={'timer-' + e.id} onClick={e.onTap} style={S(`width:100%;box-sizing:border-box;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;text-align:left${e.mine ? ';cursor:pointer' : ''}`)}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
                     <div style={S('position:relative;width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
                       <div style={S(`position:absolute;inset:0;background:${e.color};opacity:0.16`)} />
@@ -3173,17 +3180,19 @@ export default class App extends React.Component {
                     <Sym style={{ fontSize: 22, color: v.appearance.tilt.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.tilt.on ? 'toggle_on' : 'toggle_off'}</Sym>
                   </button>
                 </div>
-                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0 4px;border-top:1px solid rgba(38,35,29,0.07)')}>
                   <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 25)' }}>timer</Sym>
                   <div style={S('flex:1')}>
-                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Timers in Today</div>
-                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Running timers also hold a row in the Today list</div>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Running timers</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Cards up top, rows in the Today list, or both</div>
                   </div>
-                  <button type="button" onClick={v.appearance.timersFeed.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
-                    <Sym style={{ fontSize: 22, color: v.appearance.timersFeed.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.timersFeed.on ? 'toggle_on' : 'toggle_off'}</Sym>
-                  </button>
                 </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.canManage ? 'Colors are shared with your partner. Theme, tilt, and timers-in-Today stay on this phone.' : 'Theme, tilt, and timers-in-Today stay on this phone — colors are the household’s, set by a parent.'}</div>
+                <div style={S('display:flex;gap:8px;padding:2px 0 8px 29px')}>
+                  {v.appearance.timerSpots.map(m => (
+                    <button key={m.key} type="button" onClick={m.onTap} className={m.on ? undefined : 'hov-bd'} style={S(`flex:1;height:34px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;background:${m.on ? 'rgba(var(--accent-rgb),0.16)' : 'var(--surface)'};border:1px solid ${m.on ? 'var(--accent)' : 'rgba(var(--ink-rgb),0.12)'};color:${m.on ? 'var(--accent-deep)' : 'var(--muted)'}`)}>{m.label}</button>
+                  ))}
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.canManage ? 'Colors are shared with your partner. Theme, tilt, and timer placement stay on this phone.' : 'Theme, tilt, and timer placement stay on this phone — colors are the household’s, set by a parent.'}</div>
               </div>
 
               {v.canManage && (

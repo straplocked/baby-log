@@ -1,8 +1,8 @@
 // The multi-timer Now screen: every running timer is a card at the top (one-tap
-// Stop for its owner — it's already running, don't make them dig) AND, behind
-// the device-local timersInFeed toggle, a row holding its place in the Today
-// list, where a tap arms the two-step Stop. Timers started by someone else
-// never offer a Stop anywhere.
+// Stop for its owner — it's already running, don't make them dig) and a row
+// holding its place in the Today list, where a tap arms the two-step Stop.
+// The device-local timerSpot pref picks the surface: 'top', 'today', or 'both'
+// (default). Timers started by someone else never offer a Stop anywhere.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -134,8 +134,8 @@ describe('multi-timer rows', () => {
     expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
   })
 
-  it('the timersInFeed toggle hides the Today rows but keeps the top cards', async () => {
-    seedSignedIn({ timersInFeed: false })
+  it("timerSpot 'top' keeps the cards and hides the Today rows", async () => {
+    seedSignedIn({ timerSpot: 'top' })
     routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
     renderApp()
 
@@ -143,6 +143,26 @@ describe('multi-timer rows', () => {
     // no feed rows: the bare labels don't appear anywhere (entries are empty)
     expect(screen.queryByText('Nursing')).not.toBeInTheDocument()
     expect(screen.queryByText('Sleep')).not.toBeInTheDocument()
+  })
+
+  it("timerSpot 'today' keeps the Today rows and hides the top cards", async () => {
+    seedSignedIn({ timerSpot: 'today' })
+    routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
+    renderApp()
+
+    expect(await screen.findByText('Nursing')).toBeInTheDocument()
+    expect(screen.getByText('Sleep')).toBeInTheDocument()
+    expect(screen.queryByText('Nursing · You')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sleep · Kat')).not.toBeInTheDocument()
+  })
+
+  it('the short-lived timersInFeed=false pref migrates to top-only', async () => {
+    seedSignedIn({ timersInFeed: false })
+    routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
+    renderApp()
+
+    expect(await screen.findByText('Nursing · You')).toBeInTheDocument()
+    expect(screen.queryByText('Nursing')).not.toBeInTheDocument()
   })
 
   it('a pre-multi-timer server (singular `timer` key only) still renders its row', async () => {
