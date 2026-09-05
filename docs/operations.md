@@ -29,7 +29,7 @@ Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Scrip
 
 ## Wipe all data (testing)
 
-**Settings → User Scripts → `babylog-reset-data`** — stops api+reverb, deletes `database.sqlite`, restarts (migrations recreate it). Every account and entry is gone; **the next sign-up claims the instance**. Secrets are kept. (Unlike `babylog-update`, this script lives only on the NAS — it isn't tracked in the repo, so recreate it by hand after a flash rebuild: stop api+reverb, `rm data/database.sqlite`, start.)
+**Settings → User Scripts → `babylog-reset-data`** — stops api+reverb, deletes `database.sqlite`, restarts (migrations recreate it). Every account and entry is gone; **the next sign-up claims the instance**. Secrets are kept. (To remove just one account or household instead of everything, see "Admin commands" below.) (Unlike `babylog-update`, this script lives only on the NAS — it isn't tracked in the repo, so recreate it by hand after a flash rebuild: stop api+reverb, `rm data/database.sqlite`, start.)
 
 ## Backups
 
@@ -46,6 +46,20 @@ If realtime breaks remotely but works on LAN, check the websocket toggle on the 
 ## Registration policy
 
 Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): on the all-in-one/CA install, add a `BABYLOG_OPEN_REGISTRATION=true` container variable in Unraid's container editor. On the compose-based script install, append `BABYLOG_OPEN_REGISTRATION=true` to `/mnt/user/appdata/baby-log/.env` (same mechanism as the `MAIL_*` vars in "Enabling email" below) and run **`babylog-update`** once so compose recreates the containers with the new value. Don't hand-edit the deployed compose file — the update script replaces the source tree wholesale on every update, so that edit wouldn't survive.
+
+## Admin commands (lost passwords, stuck accounts, un-claiming)
+
+There's no admin UI on purpose — admin actions are `artisan` commands inside the api container, unreachable from the network. Run them from a host terminal or a User Scripts script (no `-it` needed; scripts pass `--force` where a command would otherwise prompt):
+
+```
+docker exec baby-log-api php artisan babylog:users        # compose-based script install
+docker exec mybabynotes php artisan babylog:users         # CA all-in-one install
+```
+
+- **`babylog:users`** — read-only map of the instance: households, members (role, on-duty), children, pending invites, former members. Start here; the other commands act on what it shows.
+- **`babylog:reset-password <email> [--password=…]`** — the no-SMTP escape hatch for a locked-out account. Prints a generated password (or sets yours, min 8 chars) and signs out every device. The password lands in the script output — have the person log in and change it in Settings right away.
+- **`babylog:remove-user <email> --force`** — same semantics as removing a member in the app (sessions/pushes revoked, duty reassigned, name snapshotted so their old entries stay attributed), for when no parent can do it from the UI. Refuses to remove a household's last member — that's a delete-household.
+- **`babylog:delete-household <id> --force`** — deletes one household with all its members, children and entries. When the last household goes, the next sign-up claims the instance — the surgical alternative to `babylog-reset-data` when you want to un-claim without wiping secrets/VAPID keys or other households.
 
 ## Enabling email (invite mail + password reset)
 

@@ -4,7 +4,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 ## Things a user will notice
 
-- **Anything email needs SMTP.** Invites and password reset both work only with SMTP configured (see operations.md "Enabling email"); without it the inviter shares the on-screen code by hand, and a forgotten password on an SMTP-less instance still needs server-side surgery (`php artisan tinker` to set a new hash, or `babylog-reset-data`).
+- **Anything email needs SMTP.** Invites and password reset both work only with SMTP configured (see operations.md "Enabling email"); without it the inviter shares the on-screen code by hand, and a forgotten password takes the admin running `babylog:reset-password` (operations.md "Admin commands").
 - **Amounts are oz/ml only.** Household-synced unit setting; storage and sync stay oz, so ml renders round to the nearest 5 ml. The comp's `timeStep` and `smartPrefill` props remain unexposed.
 - **Home timeline shows the last 12 entries**, and stats tiles plus the bar charts stay on a fixed 7-day window — day drill-down pages back to the oldest logged day, but there's no month/calendar view.
 - **Entry types are fixed** (bottle, nursing, pump, wet, dirty, both, sleep, bath, meds). No custom types and no free-text notes on entries. (Households *can* switch off pump/diapers/sleep/bath/meds tracking and rename the daily med, but can't add types.)
@@ -30,7 +30,6 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - **Community Apps entry not yet submitted.** [deploy/unraid/ca-template.xml](../deploy/unraid/ca-template.xml) and the runbook in [docs/ca-submission.md](ca-submission.md) are ready, but submission needs the `v1.0.0` tag pushed and the GHCR package flipped public first.
 - `artisan serve` (8 workers) as the production server — fine for 2 users; FPM/Octane if scope grows.
 - Sanctum token expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
-- **No admin/first-user tooling**: wiping data is the only way to un-claim an instance (`babylog-reset-data`).
 - nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
 - Frontend tests (`npm test`, Vitest) cover the support modules and the app-shell flows — auth, boot-from-cache, offline, outbox flush — but not the deep UI (log sheet, history drill-down, shift sheet, settings). The class-component + `renderVals()` structure was chosen for design fidelity; extracting screens into components would make the rest testable.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.
