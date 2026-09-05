@@ -8,7 +8,7 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Resource;
 
-#[Description('A snapshot of the household: children, members, who is on duty, any running timer, and today\'s totals.')]
+#[Description('A snapshot of the household: children, members, who is on duty, any running timers, and today\'s totals.')]
 class HouseholdOverview extends Resource
 {
     public function handle(Request $request): Response
@@ -25,7 +25,7 @@ class HouseholdOverview extends Resource
             ->where('t', '>=', $day->getTimestampMs())->get(['type', 'detail']);
 
         $count = fn (string ...$types) => $today->whereIn('type', $types)->count();
-        $timer = $household->active_timer;
+        $timers = $household->runningTimers();
         $onDuty = $household->users->firstWhere('id', $household->on_duty_user_id)?->name;
 
         $lines = [
@@ -36,8 +36,8 @@ class HouseholdOverview extends Resource
             'Members: '.$household->users->sortBy('id')
                 ->map(fn ($u) => $u->name.' ('.($u->role ?? 'parent').')')->implode(', '),
             'On duty: '.($onDuty ?? 'nobody'),
-            'Running timer: '.($timer
-                ? $timer['type'].' since '.Carbon::createFromTimestampMs($timer['started_at'])->toIso8601String()
+            'Running timers: '.($timers
+                ? collect($timers)->map(fn ($t) => $t['type'].' since '.Carbon::createFromTimestampMs($t['started_at'])->toIso8601String())->implode(', ')
                 : 'none'),
             '',
             "## Today ({$day->toDateString()}, {$tz})",

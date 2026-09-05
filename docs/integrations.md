@@ -109,7 +109,7 @@ Partial update — send only the fields you're changing (`type`, `t`, `detail`, 
 
 ### `GET /v1/timer` — `timer:read`
 
-The household's single running timer — `{id, type, started_at, user_id, baby_id}` — or null. One timer per household, even with multiple children.
+The household's running timers. `timers` lists every one — `{id, type, started_at, user_id, baby_id}` in start order; timers stack, so a nursing timer for one twin can run beside a sleep timer for the other. `timer` is the legacy singular slot (your newest, or null), kept for pre-multi-timer clients.
 
 ### `PUT /v1/timer` — `timer:write`
 
@@ -117,11 +117,11 @@ The household's single running timer — `{id, type, started_at, user_id, baby_i
 { "type": "nurse", "baby_id": 10 }
 ```
 
-Starts (or **replaces** — PUT semantics) the household timer. `type` ∈ `nurse|pump|sleep`. Other members get their usual timer push.
+Starts a timer. `type` ∈ `nurse|pump|sleep`. Starting an identical session you already have running (same type, child, and starter) returns the running timer instead of a duplicate. Other members get their usual timer push.
 
 ### `DELETE /v1/timer` — `timer:write`
 
-Stops the timer, returning what was running as `stopped` (null if nothing was). **Does not write an entry** — the consumer logs the resulting nurse/pump/sleep entry itself via `POST /v1/entries`, exactly as the app does. (The [MCP `stop-timer` tool](mcp.md#tools) offers the log-on-stop convenience; raw REST keeps the two steps explicit.)
+Stops one timer — `?id=<timer id>` picks which; omitted, it stops your newest — returning what was running as `stopped` (null if nothing matched). **Does not write an entry** — the consumer logs the resulting nurse/pump/sleep entry itself via `POST /v1/entries`, exactly as the app does. (The [MCP `stop-timer` tool](mcp.md#tools) offers the log-on-stop convenience; raw REST keeps the two steps explicit.)
 
 ## Entry semantics
 

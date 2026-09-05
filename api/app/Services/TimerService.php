@@ -7,7 +7,7 @@ use App\Models\User;
 use Illuminate\Support\Str;
 
 /**
- * The one write path for the household's live timer, shared by the internal
+ * The one write path for the household's live timers, shared by the internal
  * endpoints, /api/v1, MCP tools, and the MQTT command handler. Only running
  * state lives on the household — stopping never writes an entry (the server
  * stores facts, not in-flight guesses); producers log the resulting entry
@@ -17,8 +17,17 @@ class TimerService
 {
     private const LABELS = ['nurse' => 'nursing', 'pump' => 'pumping', 'sleep' => 'a sleep timer'];
 
-    /** Start (or replace) the running timer acting as $user. */
-    public function start(User $user, string $type, ?int $babyId = null): array
+    /**
+     * Start a timer acting as $user. Timers stack — a nursing timer for one
+     * twin and a sleep timer for the other run side by side — but starting the
+     * exact session you already have running (same type, child, and starter)
+     * returns the existing timer instead of piling on a double-tap duplicate.
+     * $id lets the PWA supply its client-generated id (entry-style), so its
+     * optimistic row and the server copy are the same timer.
+     *
+     * @return array{id: string, type: string, started_at: int, user_id: int, baby_id: int|null}
+     */
+    public function start(User $user, string $type, ?int $babyId = null, ?string $id = null): array
     {
         $household = $user->household;
         // the timer's child must be one of ours — a foreign id is dropped, and
@@ -26,14 +35,22 @@ class TimerService
         $validBabyId = $babyId !== null
             ? $household->children()->whereKey($babyId)->value('id')
             : null;
+        $timers = $household->runningTimers();
+        foreach ($timers as $t) {
+            if (($t['id'] ?? null) === $id
+                || (($t['type'] ?? null) === $type && ($t['baby_id'] ?? null) === $validBabyId && ($t['user_id'] ?? null) === $user->id)) {
+                return $t;
+            }
+        }
         $timer = [
-            'id' => (string) Str::uuid(),
+            'id' => $id ?? (string) Str::uuid(),
             'type' => $type,
             'started_at' => now()->getTimestampMs(),
             'user_id' => $user->id,
             'baby_id' => $validBabyId,
         ];
-        $household->update(['active_timer' => $timer]);
+        $timers[] = $timer;
+        $household->update(['active_timers' => $timers]);
 
         HouseholdTouched::send($household->id, 'timer');
 
@@ -64,15 +81,37 @@ class TimerService
         return $timer;
     }
 
-    /** Stop the running timer, returning what was running (null if nothing). */
-    public function stop(User $user): ?array
+    /**
+     * Stop one timer, returning what was running (null if nothing matched).
+     * Without an id (pre-multi-timer clients, the HA stop button) this stops
+     * the caller's newest timer, else the household's newest — the same timer
+     * those clients were shown in the legacy singular slot.
+     *
+     * @return array{id: string, type: string, started_at: int, user_id: int, baby_id: int|null}|null
+     */
+    public function stop(User $user, ?string $timerId = null): ?array
     {
         $household = $user->household;
-        $timer = $household->active_timer;
-        $household->update(['active_timer' => null]);
+        $timers = $household->runningTimers();
+        if ($timerId === null) {
+            $timerId = $household->legacyTimerFor($user)['id'] ?? null;
+        }
+        $stopped = null;
+        $remaining = [];
+        foreach ($timers as $t) {
+            if ($stopped === null && ($t['id'] ?? null) === $timerId) {
+                $stopped = $t;
+            } else {
+                $remaining[] = $t;
+            }
+        }
+        if ($stopped === null) {
+            return null; // already gone (a race with the other phone) — nothing to announce
+        }
+        $household->update(['active_timers' => $remaining ?: null]);
 
         HouseholdTouched::send($household->id, 'timer');
 
-        return $timer;
+        return $stopped;
     }
 }

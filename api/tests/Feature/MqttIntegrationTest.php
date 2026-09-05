@@ -194,10 +194,10 @@ class MqttIntegrationTest extends TestCase
 
         app(MqttCommandHandler::class)->handle($household,
             json_encode(['action' => 'timer_start', 'type' => 'nurse']));
-        $this->assertSame('nurse', $household->fresh()->active_timer['type']);
+        $this->assertSame('nurse', $household->fresh()->runningTimers()[0]['type']);
 
         app(MqttCommandHandler::class)->handle($household->fresh(), json_encode(['action' => 'timer_stop']));
-        $this->assertNull($household->fresh()->active_timer);
+        $this->assertSame([], $household->fresh()->runningTimers());
     }
 
     // ── listener ───────────────────────────────────────────────────────────

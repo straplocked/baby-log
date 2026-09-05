@@ -220,6 +220,22 @@ class ApiV1Test extends TestCase
         $this->assertSame(0, Entry::query()->count());
     }
 
+    public function test_concurrent_timers_are_listed_and_stopped_by_id(): void
+    {
+        [, $pat, $wrenId] = $this->parentWithPat();
+
+        $nurse = $this->putJson('/api/v1/timer', ['type' => 'nurse', 'baby_id' => $wrenId], $this->authed($pat))->json('timer');
+        $sleep = $this->putJson('/api/v1/timer', ['type' => 'sleep', 'baby_id' => $wrenId], $this->authed($pat))->json('timer');
+
+        $show = $this->getJson('/api/v1/timer', $this->authed($pat))->assertOk()->json();
+        $this->assertSame([$nurse['id'], $sleep['id']], array_column($show['timers'], 'id'));
+        $this->assertSame($sleep['id'], $show['timer']['id']); // legacy slot: the caller's newest
+
+        $stopped = $this->deleteJson('/api/v1/timer?id='.$nurse['id'], [], $this->authed($pat))->assertOk()->json('stopped');
+        $this->assertSame($nurse['id'], $stopped['id']);
+        $this->assertSame([$sleep['id']], array_column($this->getJson('/api/v1/timer', $this->authed($pat))->json('timers'), 'id'));
+    }
+
     public function test_a_foreign_baby_id_on_the_timer_is_dropped(): void
     {
         [, $pat] = $this->parentWithPat();

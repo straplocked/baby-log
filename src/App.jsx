@@ -175,7 +175,7 @@ const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'inviteMailed', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
-  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimer', 'timerSide',
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimers', 'timerSides',
   // multi-child household: the lists sync via /state; selectedChildId is a
   // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
   'children', 'members', 'selectedChildId',
@@ -229,7 +229,10 @@ export default class App extends React.Component {
       resetToken: null, resetEmail: '', resetPw: '', resetBusy: false, resetError: null, // ?reset=<token>&email= flow
       entries: [], // includes tombstones ({deleted:true}); views filter them
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
-      activeTimer: null, timerSide: null, manualDur: false,
+      // concurrent timers (twins!): [{id, type, started_at, user_id, baby_id}]
+      // in start order; timerSides remembers each nurse timer's pre-picked side
+      // by timer id; stopArmId = the row tapped open to reveal its Stop button
+      activeTimers: [], timerSides: {}, stopArmId: null, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
       toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -259,7 +262,15 @@ export default class App extends React.Component {
     }
     const saved = loadSaved()
     if (saved) for (const k of PERSIST) if (k in saved) this.state[k] = saved[k]
+    // a device upgrading from the single-timer era persisted {activeTimer, timerSide}
+    if (saved?.activeTimer && !saved.activeTimers) {
+      this.state.activeTimers = [saved.activeTimer]
+      if (saved.timerSide) this.state.timerSides = { [saved.activeTimer.id]: saved.timerSide }
+    }
     this.state.settings = { tracking: {}, dismissed: [], ...(this.state.settings || {}) }
+    // in-flight timer start/stop request counter — while >0 the server's timer
+    // list is stale and must not clobber our optimistic rows
+    this._timerBusy = 0
     // no token → cached signed-in screens are stale
     if (!getToken() && !['splash', 'auth'].includes(this.state.screen)) this.state.screen = 'splash'
     // arriving from a password-reset email: ?reset=<token>&email=<addr> — the
@@ -281,7 +292,7 @@ export default class App extends React.Component {
       if (!isEchoConnected() || this.state.tick % 3 === 0) this.sync()
     }, 20000)
     // a running timer needs a live second hand; idle when none is going
-    this._sec = setInterval(() => { if (this.state.activeTimer) this.setState(s => ({ tick: s.tick + 1 })) }, 1000)
+    this._sec = setInterval(() => { if (this.state.activeTimers.length) this.setState(s => ({ tick: s.tick + 1 })) }, 1000)
     this._wake = () => this.sync()
     window.addEventListener('focus', this._wake)
     window.addEventListener('online', this._wake)
@@ -419,8 +430,10 @@ export default class App extends React.Component {
       }
       if (!s.notifyPrefsDirty && st.user?.notifyPrefs) next.notifyPrefs = st.user.notifyPrefs
       if (st.vapidPublicKey) next.vapidKey = st.vapidPublicKey
-      // server owns the running timer, except while our own start/stop is in flight
-      if (!this._timerBusy) next.activeTimer = st.timer || null
+      // server owns the running timers, except while our own start/stop is in
+      // flight (a request counter); a pre-multi-timer server sends only the
+      // singular key — wrap it so this client still renders its one row
+      if (!this._timerBusy) next.activeTimers = st.timers || (st.timer ? [st.timer] : [])
       if (st.baby) {
         next.babyName = st.baby.name
         if (st.baby.age) next.age = st.baby.age
@@ -603,7 +616,7 @@ export default class App extends React.Component {
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
-      activeTimer: null, timerSide: null, manualDur: false,
+      activeTimers: [], timerSides: {}, stopArmId: null, manualDur: false,
       acctName: '', acctBabyName: '', acctOpen: null, acctError: null, acctBusy: false,
       acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
       apiTokens: null, apiScopes: null, tokensOpen: false, tokenAddOpen: false,
@@ -1099,36 +1112,53 @@ export default class App extends React.Component {
     const side = type === 'nurse' ? (this.state.detail || this.defaultDetail('nurse')) : null
     // the sheet's child chip (when >1 child) decides who this session is for
     const babyId = this.state.sheetChildId ?? this.selChildId()
-    this._timerBusy = true
+    // client-generated id, entry-style — the optimistic row IS the server timer,
+    // so a reconcile mid-flight can't duplicate it
+    const id = uuid()
+    this._timerBusy++
     this.closeSheet() // animated close that also consumes the {blSheet} history entry
-    this.setState({
+    this.setState(s => ({
       manualDur: false,
-      activeTimer: { id: 'local', type, started_at: Date.now(), user_id: this.state.me?.id, baby_id: babyId },
-      timerSide: side,
-    })
-    api.timerStart(type, babyId)
-      .then(r => this.setState({ activeTimer: r.timer }))
+      activeTimers: [...s.activeTimers, { id, type, started_at: Date.now(), user_id: s.me?.id, baby_id: babyId }],
+      timerSides: side ? { ...s.timerSides, [id]: side } : s.timerSides,
+    }))
+    api.timerStart(type, babyId, id)
+      .then(r => this.setState(s => {
+        // the server may hand back an already-running identical session
+        // (double-tap) — adopt its copy either way, carrying the side across
+        const timerSides = { ...s.timerSides }
+        if (r.timer.id !== id && timerSides[id] != null) {
+          if (timerSides[r.timer.id] == null) timerSides[r.timer.id] = timerSides[id]
+          delete timerSides[id]
+        }
+        const rest = s.activeTimers.filter(t => t.id !== id && t.id !== r.timer.id)
+        return { activeTimers: [...rest, r.timer].sort((a, b) => (a.started_at || 0) - (b.started_at || 0)), timerSides }
+      }))
       .catch(() => this.setState({ offline: true }))
-      .finally(() => { this._timerBusy = false })
+      .finally(() => { this._timerBusy-- })
   }
-  stopTimer = () => {
-    const t = this.state.activeTimer
+  stopTimer = id => {
+    const t = this.state.activeTimers.find(x => x.id === id)
     if (!t || t.user_id !== this.state.me?.id) return // only the parent who started can stop + log
     const mins = Math.max(1, Math.round((Date.now() - t.started_at) / 60000))
-    this._timerBusy = true
-    this.setState({ activeTimer: null })
-    api.timerStop().catch(() => this.setState({ offline: true })).finally(() => { this._timerBusy = false })
+    const side = this.state.timerSides[id]
+    this._timerBusy++
+    this.setState(s => {
+      const timerSides = { ...s.timerSides }
+      delete timerSides[id]
+      return { activeTimers: s.activeTimers.filter(x => x.id !== id), timerSides, stopArmId: null }
+    })
+    api.timerStop(id).catch(() => this.setState({ offline: true })).finally(() => { this._timerBusy-- })
     // the entry belongs to the child the timer was started for — pill switches
     // mid-session must not redirect the log (null-era timers → primary child)
     const timerBabyId = t.baby_id ?? this.primaryChildId()
     if (t.type === 'nurse') {
       // nursing: measured side + duration log straight away, undo available
-      const side = this.state.timerSide || this.defaultDetail('nurse')
-      const detail = [side, mins + 'm'].filter(Boolean).join(' · ')
+      const detail = [side || this.defaultDetail('nurse'), mins + 'm'].filter(Boolean).join(' · ')
       const entry = { id: uuid(), type: 'nurse', t: t.started_at, detail, by: this.state.me?.id, babyId: timerBabyId }
       this.setState(s => ({
         entries: [entry, ...s.entries], outbox: [...s.outbox, entry.id],
-        toast: 'Nursing logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id }, timerSide: null,
+        toast: 'Nursing logged · ' + this.dur(mins), undoAction: { kind: 'add', id: entry.id },
       }), () => this.flushSoon())
       this.bumpToast()
     } else if (t.type === 'sleep') {
@@ -1147,7 +1177,7 @@ export default class App extends React.Component {
       const last = this.lastOf(['pump'])
       this.mountSheet({
         editId: null, sel: 'pump', offset: 0, pickedT: null, manualDur: true, sheetChildId: timerBabyId,
-        detail: this.amt(last ? (dSplit(last.detail).n ?? 4) : 4), detail2: mins, timerSide: null,
+        detail: this.amt(last ? (dSplit(last.detail).n ?? 4) : 4), detail2: mins,
       })
     }
   }
@@ -1777,8 +1807,6 @@ export default class App extends React.Component {
     // nursing/pump/sleep default to the live timer; a manual toggle logs a past session
     const timerType = (st.key === 'nurse' || st.key === 'pump' || st.key === 'sleep') && !s.editId
     const timerFirst = timerType && !s.manualDur
-    const at = s.activeTimer
-    const atType = at ? T(at.type) : null
 
     const feed = this.lastOf(FEEDS), dia = this.lastOf(DIAPERS), sleep = this.lastOf(['sleep'])
     const handoffRows = [
@@ -2007,20 +2035,28 @@ export default class App extends React.Component {
       toManual: () => this.setState({ manualDur: true }),
       toTimer: () => this.setState({ manualDur: false }),
       manualHint: st.key === 'nurse' ? 'Log a past feed' : st.key === 'sleep' ? 'Log a past sleep' : 'Log a past session',
-      // running-timer banner on Now — with 2+ unarchived children the banner
-      // names the timer's child (null baby_id = primary, same rule as entries);
-      // a single-child household renders exactly as before
-      timerActive: !!at,
-      timerLabel: at ? (at.type === 'nurse' ? 'Nursing' : at.type === 'sleep' ? 'Sleep' : 'Pumping') : '',
-      timerChild: at && kids.length > 1
-        ? ((s.children || []).find(c => c.id === (at.baby_id ?? this.primaryChildId()))?.name || '')
-        : '',
-      timerIcon: atType ? atType.icon : 'timer',
-      timerColor: atType ? atType.color : OLIVE,
-      timerElapsed: at ? this.stopwatch(Date.now() - at.started_at) : '',
-      timerMine: !!(at && me && at.user_id === me.id),
-      timerWho: at ? (at.user_id === me?.id ? 'You' : this.memberName(at.user_id, partnerName)) : '',
-      stopTimer: this.stopTimer,
+      // running-timer rows on Now — one per concurrent timer, in start order so
+      // rows stay put as new ones append. With 2+ unarchived children each row
+      // names its child (null baby_id = primary, same rule as entries). A row
+      // shows a live timer glyph until its owner taps it, which arms the Stop
+      // button; the second tap stops and logs.
+      timers: s.activeTimers.map(t => {
+        const tt = T(t.type)
+        return {
+          id: t.id,
+          label: t.type === 'nurse' ? 'Nursing' : t.type === 'sleep' ? 'Sleep' : 'Pumping',
+          child: kids.length > 1
+            ? ((s.children || []).find(c => c.id === (t.baby_id ?? this.primaryChildId()))?.name || '')
+            : '',
+          icon: tt.icon, color: tt.color,
+          elapsed: this.stopwatch(Date.now() - t.started_at),
+          mine: !!(me && t.user_id === me.id),
+          who: t.user_id === me?.id ? 'You' : this.memberName(t.user_id, partnerName),
+          armed: s.stopArmId === t.id,
+          arm: () => this.setState(x => ({ stopArmId: x.stopArmId === t.id ? null : t.id })),
+          stop: () => this.stopTimer(t.id),
+        }
+      }),
       saveLabel: (s.editId ? 'Update ' : 'Save ') + st.label.toLowerCase() + detailStr,
       editing: !!s.editId, toast: !!s.toast, toastText: s.toast || '', toastLeaving: s.toastLeaving, canUndo: !!s.undoAction,
       openSheet: this.openSheet, closeSheet: this.closeSheet, save: this.save, undo: this.undo, remove: this.remove,
@@ -2544,27 +2580,27 @@ export default class App extends React.Component {
 
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
 
-              {v.timerActive && (
-                <div style={S(`background:#FFFDF8;border:1px solid ${v.timerColor};border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:13px;position:relative;overflow:hidden`)}>
-                  <div style={S(`position:absolute;inset:0;opacity:0.06;background:${v.timerColor}`)} />
+              {v.timers.map(t => (
+                <div key={t.id} onClick={t.mine ? t.arm : undefined} style={S(`background:#FFFDF8;border:1px solid ${t.color};border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:13px;position:relative;overflow:hidden${t.mine ? ';cursor:pointer' : ''}`)}>
+                  <div style={S(`position:absolute;inset:0;opacity:0.06;background:${t.color}`)} />
                   <div style={S('position:relative;width:42px;height:42px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
-                    <div style={S(`position:absolute;inset:0;background:${v.timerColor};opacity:0.18`)} />
-                    <Sym style={{ position: 'relative', fontSize: 22, color: v.timerColor }}>{v.timerIcon}</Sym>
+                    <div style={S(`position:absolute;inset:0;background:${t.color};opacity:0.18`)} />
+                    <Sym style={{ position: 'relative', fontSize: 22, color: t.color }}>{t.icon}</Sym>
                   </div>
                   <div style={S('position:relative;flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
-                    <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{v.timerLabel}{v.timerChild ? ' · ' + v.timerChild : ''} · {v.timerWho}</div>
-                    <div style={S("font-family:'Nunito',sans-serif;font-weight:700;font-size:24px;letter-spacing:-0.03em;color:#3D392F;font-variant-numeric:tabular-nums")}>{v.timerElapsed}</div>
+                    <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{t.label}{t.child ? ' · ' + t.child : ''} · {t.who}</div>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:700;font-size:24px;letter-spacing:-0.03em;color:#3D392F;font-variant-numeric:tabular-nums")}>{t.elapsed}</div>
                   </div>
-                  {v.timerMine ? (
-                    <button type="button" onClick={v.stopTimer} className="hov-dark" style={S('position:relative;height:44px;padding:0 20px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
+                  {t.armed && t.mine ? (
+                    <button type="button" onClick={e => { e.stopPropagation(); t.stop() }} className="hov-dark" style={S('position:relative;height:44px;padding:0 18px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
                       <Sym style={{ fontSize: 18, color: 'var(--bg)' }}>stop</Sym>
-                      <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop</div>
+                      <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop timer</div>
                     </button>
                   ) : (
-                    <div style={S("position:relative;font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;flex-shrink:0")}>in progress</div>
+                    <Sym style={{ position: 'relative', fontSize: 22, color: t.color, flexShrink: 0 }}>timer</Sym>
                   )}
                 </div>
-              )}
+              ))}
 
               {v.incoming && (
                 <div style={S('background:#FFFDF8;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:16px 16px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:12px')}>

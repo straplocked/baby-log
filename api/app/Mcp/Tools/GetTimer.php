@@ -9,7 +9,7 @@ use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
 #[IsReadOnly]
-#[Description('The household\'s running timer (nursing, pumping, or sleep), or null if none.')]
+#[Description('The household\'s running timers (nursing, pumping, or sleep) — `timers` lists every one; `timer` is the caller\'s newest (or null), kept for older clients.')]
 class GetTimer extends BabylogTool
 {
     public function handle(Request $request): Response
@@ -19,14 +19,18 @@ class GetTimer extends BabylogTool
         }
 
         $user = $this->user($request);
-        $timer = $user->household->active_timer;
+        $names = $this->memberNames($user);
+        $enrich = fn (array $timer) => array_merge($timer, [
+            'started' => Carbon::createFromTimestampMs($timer['started_at'])->toIso8601String(),
+            'elapsed_minutes' => (int) floor((now()->getTimestampMs() - $timer['started_at']) / 60000),
+            'by' => $names[$timer['user_id']] ?? null,
+        ]);
+
+        $legacy = $user->household->legacyTimerFor($user);
 
         return Response::json([
-            'timer' => $timer ? array_merge($timer, [
-                'started' => Carbon::createFromTimestampMs($timer['started_at'])->toIso8601String(),
-                'elapsed_minutes' => (int) floor((now()->getTimestampMs() - $timer['started_at']) / 60000),
-                'by' => $this->memberNames($user)[$timer['user_id']] ?? null,
-            ]) : null,
+            'timer' => $legacy ? $enrich($legacy) : null,
+            'timers' => array_map($enrich, $user->household->runningTimers()),
         ]);
     }
 }

@@ -526,6 +526,45 @@ class BabylogApiTest extends TestCase
         $this->assertNull($this->getJson('/api/state', $this->authed($kat))->json('timer'));
     }
 
+    public function test_concurrent_timers_stack_and_stop_individually(): void
+    {
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+        $code = $this->postJson('/api/invite', ['email' => 'katrina@example.com'], $this->authed($ben))->json('code');
+        $kat = $this->postJson('/api/register', ['name' => 'Katrina', 'email' => 'katrina@example.com', 'password' => 'password123', 'invite' => $code])->json('token');
+
+        $nurse = $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($ben))->json('timer');
+        $sleep = $this->postJson('/api/timer/start', ['type' => 'sleep'], $this->authed($kat))->json('timer');
+
+        // both run side by side; the legacy singular slot is each viewer's own
+        $benState = $this->getJson('/api/state', $this->authed($ben))->json();
+        $this->assertCount(2, $benState['timers']);
+        $this->assertSame($nurse['id'], $benState['timer']['id']);
+        $this->assertSame($sleep['id'], $this->getJson('/api/state', $this->authed($kat))->json('timer.id'));
+
+        // an identical re-start (double tap) returns the running timer, no duplicate
+        $again = $this->postJson('/api/timer/start', ['type' => 'nurse'], $this->authed($ben))->json('timer');
+        $this->assertSame($nurse['id'], $again['id']);
+        $this->assertCount(2, $this->getJson('/api/state', $this->authed($ben))->json('timers'));
+
+        // stopping by id takes down only that timer
+        $this->postJson('/api/timer/stop', ['id' => $sleep['id']], $this->authed($kat))->assertOk();
+        $left = $this->getJson('/api/state', $this->authed($ben))->json('timers');
+        $this->assertCount(1, $left);
+        $this->assertSame($nurse['id'], $left[0]['id']);
+    }
+
+    public function test_the_client_may_supply_the_timer_id(): void
+    {
+        config(['babylog.open_registration' => true]);
+        $ben = $this->register('Ben', 'ben@example.com')->json('token');
+
+        $timer = $this->postJson('/api/timer/start', ['type' => 'pump', 'id' => 'client-made-id'], $this->authed($ben))->json('timer');
+        $this->assertSame('client-made-id', $timer['id']);
+
+        $this->postJson('/api/timer/stop', ['id' => 'client-made-id'], $this->authed($ben))->assertOk();
+        $this->assertSame([], $this->getJson('/api/state', $this->authed($ben))->json('timers'));
+    }
+
     // ── shift edge cases ─────────────────────────────────────────────────────
 
     public function test_accept_tolerates_fractional_plan_timestamps(): void

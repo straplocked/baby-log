@@ -57,8 +57,9 @@ export const api = {
   mqttSave: b => call('/integrations/mqtt', { method: 'POST', body: b }), // omit password to keep the stored one
   mqttTest: b => call('/integrations/mqtt/test', { method: 'POST', body: b }), // {ok, message?} — a 200 either way
   pushEntries: entries => call('/entries', { method: 'POST', body: { entries } }),
-  timerStart: (type, babyId) => call('/timer/start', { method: 'POST', body: { type, ...(babyId != null ? { baby_id: babyId } : {}) } }), // baby_id absent → primary child
-  timerStop: () => call('/timer/stop', { method: 'POST' }),
+  // baby_id absent → primary child; id is our client-generated timer id (entry-style)
+  timerStart: (type, babyId, id) => call('/timer/start', { method: 'POST', body: { type, ...(babyId != null ? { baby_id: babyId } : {}), ...(id ? { id } : {}) } }),
+  timerStop: id => call('/timer/stop', { method: 'POST', ...(id ? { body: { id } } : {}) }),
   shiftRequest: note => call('/shifts/request', { method: 'POST', body: { note } }),
   shiftAccept: (plan, until, untilAt) => call('/shifts/accept', { method: 'POST', body: { plan, until, until_at: untilAt } }), // until_at: ms epoch or null
   shiftPlan: plan => call('/shifts/plan', { method: 'POST', body: { plan } }),

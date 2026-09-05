@@ -99,7 +99,9 @@ The single polling/converge endpoint.
                "requested_at": 0, "started_at": 0, "ended_at": 0,
                "handback_note": "…" },               // latest row, or null
   "timer":   { "id": "uuid", "type": "nurse", "started_at": 0, "user_id": 1,
-               "baby_id": 10 },                      // running timer, or null; baby_id null ⇒ primary child
+               "baby_id": 10 },                      // LEGACY singular: the caller's newest running timer (else the household's), or null
+  "timers":  [ { "id": "uuid", "type": "nurse", "started_at": 0, "user_id": 1,
+                 "baby_id": 10 } ],                  // every running timer, in start order; baby_id null ⇒ primary child
   "entries": [ { "id": "uuid", "user_id": 1, "baby_id": 10, "type": "bottle", "t": 1750000000000,
                  "detail": "4", "deleted": false, "rev": 1750000000123 } ],
   "serverTime": 1750000000456,
@@ -158,13 +160,13 @@ Any subset of the `notifyPrefs` keys shown in `/state`; provided keys merge over
 
 ## Timers — all auth + throttle 120/min
 
-The live nursing/pump/sleep timer. **One per household** (even with multiple children), synced via `/state` (`timer`: `{id, type, started_at, user_id, baby_id}` or null). Only the running state lives server-side; the resulting entry is written client-side through `/entries` on stop.
+The live nursing/pump/sleep timers. **Timers stack** — a nursing timer for one twin can run beside a sleep timer for the other — synced via `/state` (`timers`: a list of `{id, type, started_at, user_id, baby_id}` in start order; the legacy singular `timer` key carries the caller's newest for pre-multi-timer clients). Only the running state lives server-side; the resulting entry is written client-side through `/entries` on stop.
 
 ### `POST /timer/start`
-`{ type: nurse|pump|sleep, baby_id? }` → sets (or replaces) the household's `active_timer`, broadcasts a poke, and pushes every other member whose `timer` pref is on (honoring quiet hours) "{name} started nursing/pumping". `baby_id` must be one of the household's children — a foreign id is dropped (stored as null, which clients read as the primary child). Returns `{ ok, timer }`.
+`{ type: nurse|pump|sleep, baby_id?, id? }` → appends to the household's `active_timers`, broadcasts a poke, and pushes every other member whose `timer` pref is on (honoring quiet hours) "{name} started nursing/pumping". Starting an identical session you already have running (same type, child, and starter — a double tap) returns the existing timer instead of stacking a duplicate. `baby_id` must be one of the household's children — a foreign id is dropped (stored as null, which clients read as the primary child). `id` is an optional client-generated timer id (entry-style), so the app's optimistic row and the server copy are the same timer. Returns `{ ok, timer }`.
 
 ### `POST /timer/stop`
-Clears `active_timer`, broadcasts a poke. Returns `{ ok }`. The client logs the nurse/pump entry (with the measured duration) separately.
+`{ id? }` — removes that timer from `active_timers`, broadcasts a poke. Without `id` (pre-multi-timer clients) it stops the caller's newest timer, else the household's newest. Returns `{ ok, stopped }` (`stopped` null if nothing matched). The client logs the nurse/pump entry (with the measured duration) separately.
 
 ## Shifts — all auth + throttle 120/min
 

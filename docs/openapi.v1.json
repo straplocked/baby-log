@@ -570,9 +570,39 @@
                                     "properties": {
                                         "timer": {
                                             "type": [
-                                                "array",
+                                                "object",
                                                 "null"
                                             ],
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string"
+                                                },
+                                                "type": {
+                                                    "type": "string"
+                                                },
+                                                "started_at": {
+                                                    "type": "integer"
+                                                },
+                                                "user_id": {
+                                                    "type": "integer"
+                                                },
+                                                "baby_id": {
+                                                    "type": [
+                                                        "integer",
+                                                        "null"
+                                                    ]
+                                                }
+                                            },
+                                            "required": [
+                                                "id",
+                                                "type",
+                                                "started_at",
+                                                "user_id",
+                                                "baby_id"
+                                            ]
+                                        },
+                                        "timers": {
+                                            "type": "array",
                                             "items": {}
                                         },
                                         "server_time": {
@@ -581,6 +611,7 @@
                                     },
                                     "required": [
                                         "timer",
+                                        "timers",
                                         "server_time"
                                     ]
                                 }
@@ -630,7 +661,12 @@
                                                 "user_id": {
                                                     "type": "integer"
                                                 },
-                                                "baby_id": {}
+                                                "baby_id": {
+                                                    "type": [
+                                                        "integer",
+                                                        "null"
+                                                    ]
+                                                }
                                             },
                                             "required": [
                                                 "id",
@@ -661,6 +697,17 @@
                 "tags": [
                     "Timer"
                 ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "query",
+                        "description": "which timer to stop; omitted = your newest (the legacy singular slot)",
+                        "schema": {
+                            "type": "string",
+                            "maxLength": 64
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "",
@@ -671,10 +718,36 @@
                                     "properties": {
                                         "stopped": {
                                             "type": [
-                                                "array",
+                                                "object",
                                                 "null"
                                             ],
-                                            "items": {}
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string"
+                                                },
+                                                "type": {
+                                                    "type": "string"
+                                                },
+                                                "started_at": {
+                                                    "type": "integer"
+                                                },
+                                                "user_id": {
+                                                    "type": "integer"
+                                                },
+                                                "baby_id": {
+                                                    "type": [
+                                                        "integer",
+                                                        "null"
+                                                    ]
+                                                }
+                                            },
+                                            "required": [
+                                                "id",
+                                                "type",
+                                                "started_at",
+                                                "user_id",
+                                                "baby_id"
+                                            ]
                                         }
                                     },
                                     "required": [
@@ -683,6 +756,9 @@
                                 }
                             }
                         }
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/ValidationException"
                     },
                     "401": {
                         "$ref": "#/components/responses/AuthenticationException"

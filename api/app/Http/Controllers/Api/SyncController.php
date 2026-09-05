@@ -56,7 +56,10 @@ class SyncController extends Controller
             'onDutyUserId' => $household->on_duty_user_id,
             'settings' => $household->settings,
             'shift' => $shift,
-            'timer' => $household->active_timer,
+            // legacy singular key: installed PWAs that predate multi-timer show
+            // one banner and stop it without an id — give them their own timer
+            'timer' => $household->legacyTimerFor($user),
+            'timers' => $household->runningTimers(),
             'entries' => $entries,
             // server caps, so clients can grey out "add" buttons instead of 422ing
             'limits' => [

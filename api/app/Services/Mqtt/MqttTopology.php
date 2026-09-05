@@ -211,7 +211,11 @@ class MqttTopology
 
     public function timerStateMessages(): array
     {
-        $timer = $this->household->active_timer;
+        // several timers can run at once; the sensor keeps its old single-value
+        // shape (the newest timer) so existing HA dashboards don't break, and
+        // the full list rides the attributes for automations that want it all
+        $timers = $this->household->runningTimers();
+        $timer = $timers ? end($timers) : null;
         $names = $this->memberNames();
 
         return [
@@ -225,6 +229,12 @@ class MqttTopology
                 'payload' => json_encode($timer ? [
                     'baby_id' => $timer['baby_id'],
                     'by' => $names[$timer['user_id']] ?? null,
+                    'count' => count($timers),
+                    'timers' => array_map(fn ($t) => [
+                        'id' => $t['id'], 'type' => $t['type'], 'baby_id' => $t['baby_id'],
+                        'started' => Carbon::createFromTimestampMs($t['started_at'], 'UTC')->toIso8601String(),
+                        'by' => $names[$t['user_id']] ?? null,
+                    ], $timers),
                 ] : new \stdClass, JSON_UNESCAPED_SLASHES),
                 'retain' => true,
             ],

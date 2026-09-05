@@ -8,35 +8,44 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * The live nursing/pump/sleep timer. Only the running state lives here — when
- * the timer stops, the client writes the resulting entry through the normal
+ * The live nursing/pump/sleep timers. Only running state lives here — when a
+ * timer stops, the client writes the resulting entry through the normal
  * outbox, so the log stays the single source of truth (the server stores facts,
- * not in-flight guesses).
+ * not in-flight guesses). Timers stack; each start/stop names one by id.
  */
 class TimerController extends Controller
 {
-    /** Start (or replace) the household's running timer. */
+    /** Start a timer. `id` is the client-generated id, entry-style. */
     public function start(Request $request, TimerService $timers): JsonResponse
     {
         $data = $request->validate([
             'type' => ['required', 'in:nurse,pump,sleep'],
             'baby_id' => ['nullable', 'integer'],
+            'id' => ['sometimes', 'string', 'max:64'],
         ]);
 
         $timer = $timers->start(
             $request->user(),
             $data['type'],
             isset($data['baby_id']) ? (int) $data['baby_id'] : null,
+            $data['id'] ?? null,
         );
 
         return response()->json(['ok' => true, 'timer' => $timer]);
     }
 
-    /** Stop the running timer. The entry itself is logged client-side. */
+    /**
+     * Stop one timer by id. The entry itself is logged client-side. No id is
+     * the pre-multi-timer form: stops the caller's newest timer.
+     */
     public function stop(Request $request, TimerService $timers): JsonResponse
     {
-        $timers->stop($request->user());
+        $data = $request->validate([
+            'id' => ['sometimes', 'string', 'max:64'],
+        ]);
 
-        return response()->json(['ok' => true]);
+        $stopped = $timers->stop($request->user(), $data['id'] ?? null);
+
+        return response()->json(['ok' => true, 'stopped' => $stopped]);
     }
 }

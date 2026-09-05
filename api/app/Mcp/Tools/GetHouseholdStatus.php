@@ -9,7 +9,7 @@ use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
 #[IsReadOnly]
-#[Description('Who is in the household, who is on duty, the latest shift, and any running timer.')]
+#[Description('Who is in the household, who is on duty, the latest shift, and any running timers.')]
 class GetHouseholdStatus extends BabylogTool
 {
     public function handle(Request $request): Response
@@ -21,7 +21,13 @@ class GetHouseholdStatus extends BabylogTool
         $user = $this->user($request);
         $household = $user->household()->with(['users', 'children'])->first();
         $shift = $household->shifts()->latest('id')->first();
-        $timer = $household->active_timer;
+        $names = $this->memberNames($user);
+        $enrich = fn (array $timer) => array_merge($timer, [
+            'started' => Carbon::createFromTimestampMs($timer['started_at'])->toIso8601String(),
+            'elapsed_minutes' => (int) floor((now()->getTimestampMs() - $timer['started_at']) / 60000),
+            'by' => $names[$timer['user_id']] ?? null,
+        ]);
+        $legacy = $household->legacyTimerFor($user);
 
         return Response::json([
             'members' => $household->users->sortBy('id')->values()
@@ -39,11 +45,8 @@ class GetHouseholdStatus extends BabylogTool
                 'note' => $shift->note,
                 'until' => $shift->until,
             ] : null,
-            'timer' => $timer ? array_merge($timer, [
-                'started' => Carbon::createFromTimestampMs($timer['started_at'])->toIso8601String(),
-                'elapsed_minutes' => (int) floor((now()->getTimestampMs() - $timer['started_at']) / 60000),
-                'by' => $this->memberNames($user)[$timer['user_id']] ?? null,
-            ]) : null,
+            'timer' => $legacy ? $enrich($legacy) : null,
+            'timers' => array_map($enrich, $household->runningTimers()),
         ]);
     }
 }

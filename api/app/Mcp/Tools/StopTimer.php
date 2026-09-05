@@ -9,12 +9,13 @@ use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Attributes\Description;
 
-#[Description('Stop the running timer, optionally logging the resulting entry (like the app does): sleep logs elapsed minutes as detail; nurse logs the side you pass as detail; pump logs the ounces you pass as detail.')]
+#[Description('Stop a running timer (several can run at once — get_timer lists them; omitting timer_id stops your newest), optionally logging the resulting entry (like the app does): sleep logs elapsed minutes as detail; nurse logs the side you pass as detail; pump logs the ounces you pass as detail.')]
 class StopTimer extends BabylogTool
 {
     public function schema(JsonSchema $schema): array
     {
         return [
+            'timer_id' => $schema->string()->max(64)->description('Which timer to stop (ids from get_timer). Omitted: the caller\'s newest timer.'),
             'log' => $schema->boolean()->description('Also log the entry the timer was tracking (default true).'),
             'detail' => $schema->string()->max(100)->description('Detail for the logged entry: side for nurse (e.g. "L"), ounces for pump. Ignored for sleep (elapsed minutes are used).'),
         ];
@@ -27,7 +28,8 @@ class StopTimer extends BabylogTool
         }
 
         $user = $this->user($request);
-        $stopped = app(TimerService::class)->stop($user);
+        $timerId = $request->get('timer_id');
+        $stopped = app(TimerService::class)->stop($user, $timerId !== null ? (string) $timerId : null);
         if (! $stopped) {
             return Response::json(['stopped' => null, 'logged' => null]);
         }

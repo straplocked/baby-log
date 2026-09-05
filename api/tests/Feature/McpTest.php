@@ -181,10 +181,10 @@ class McpTest extends TestCase
         Sanctum::actingAs($ben, ['mcp', 'timer:write', 'entries:write']);
 
         BabylogServer::tool(StartTimer::class, ['type' => 'sleep', 'baby_id' => $wrenId])->assertOk();
-        $this->assertSame('sleep', $ben->household->fresh()->active_timer['type']);
+        $this->assertSame('sleep', $ben->household->fresh()->runningTimers()[0]['type']);
 
         BabylogServer::tool(StopTimer::class)->assertOk();
-        $this->assertNull($ben->household->fresh()->active_timer);
+        $this->assertSame([], $ben->household->fresh()->runningTimers());
 
         $row = Entry::query()->firstOrFail();
         $this->assertSame('sleep', $row->type);
@@ -195,6 +195,20 @@ class McpTest extends TestCase
         BabylogServer::tool(StartTimer::class, ['type' => 'pump'])->assertOk();
         BabylogServer::tool(StopTimer::class, ['log' => false])->assertOk();
         $this->assertSame(1, Entry::query()->count());
+    }
+
+    public function test_concurrent_timers_stop_by_id(): void
+    {
+        [$ben, , $wrenId] = $this->household();
+        Sanctum::actingAs($ben, ['mcp', 'timer:read', 'timer:write']);
+
+        BabylogServer::tool(StartTimer::class, ['type' => 'nurse', 'baby_id' => $wrenId])->assertOk();
+        BabylogServer::tool(StartTimer::class, ['type' => 'sleep', 'baby_id' => $wrenId])->assertOk();
+        $timers = $ben->household->fresh()->runningTimers();
+        $this->assertCount(2, $timers);
+
+        BabylogServer::tool(StopTimer::class, ['timer_id' => $timers[0]['id'], 'log' => false])->assertOk();
+        $this->assertSame([$timers[1]['id']], array_column($ben->household->fresh()->runningTimers(), 'id'));
     }
 
     // ── scope sweep ────────────────────────────────────────────────────────

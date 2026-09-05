@@ -9,17 +9,22 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * The household's single running timer as a singleton resource: PUT starts
- * (or replaces), DELETE stops. Stopping never writes an entry — the server
- * stores facts, not in-flight guesses; log the resulting entry yourself via
- * POST /v1/entries, exactly like the app does.
+ * The household's running timers. Timers stack (a nursing timer for one twin
+ * beside a sleep timer for the other): PUT starts one, DELETE stops one by id.
+ * `timer` in responses is the legacy singular slot — your newest timer — kept
+ * for pre-multi-timer clients; new code should read `timers`. Stopping never
+ * writes an entry — the server stores facts, not in-flight guesses; log the
+ * resulting entry yourself via POST /v1/entries, exactly like the app does.
  */
 class TimerController extends Controller
 {
     public function show(Request $request): JsonResponse
     {
+        $household = $request->user()->household;
+
         return response()->json([
-            'timer' => $request->user()->household->active_timer,
+            'timer' => $household->legacyTimerFor($request->user()),
+            'timers' => $household->runningTimers(),
             'server_time' => now()->getTimestampMs(),
         ]);
     }
@@ -38,7 +43,12 @@ class TimerController extends Controller
 
     public function destroy(Request $request, TimerService $timers): JsonResponse
     {
-        $stopped = $timers->stop($request->user());
+        $data = $request->validate([
+            // which timer to stop; omitted = your newest (the legacy singular slot)
+            'id' => ['sometimes', 'string', 'max:64'],
+        ]);
+
+        $stopped = $timers->stop($request->user(), $data['id'] ?? null);
 
         return response()->json(['stopped' => $stopped]);
     }

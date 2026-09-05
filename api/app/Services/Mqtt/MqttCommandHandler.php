@@ -45,7 +45,14 @@ class MqttCommandHandler
                     in_array($cmd['type'] ?? '', ['nurse', 'pump', 'sleep'], true) ? $cmd['type'] : 'sleep',
                     $babyId,
                 ),
-                'timer_stop' => app(TimerService::class)->stop($actor),
+                // timer_id picks one of several running timers; without it the
+                // stop takes the household's newest — the one the HA sensor shows
+                'timer_stop' => app(TimerService::class)->stop(
+                    $actor,
+                    isset($cmd['timer_id'])
+                        ? substr((string) $cmd['timer_id'], 0, 64)
+                        : (array_reverse($household->runningTimers())[0]['id'] ?? null),
+                ),
                 default => null,
             };
         } catch (\Throwable $e) {

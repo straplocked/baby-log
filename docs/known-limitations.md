@@ -13,11 +13,10 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 
 ## Multi-member / multi-child edges
 
-- **One active timer per household, even with twins.** Starting a second nursing timer replaces the first. The timer stores (and names) which child it's for, but there's still only one.
 - **The daily meds nudge is household-level** — one dose tracked, not per child. (Feed reminders *do* have per-child intervals.)
 - **Shifts are household-level** ("who has the kids"), not per child. The shift sheet's drafted plan and "Right now" rows read the currently selected child's rhythm; there's no explicit per-child or all-children framing in the sheet.
 - **Members removed before 2026-09-04** have no name snapshot in `households.former_members`, so their old entries render without an attribution chip. Not recoverable.
-- **Timer stop has no ownership check at the API layer** — the client only lets the member who started a timer stop it, but the endpoint itself would accept anyone's stop. Not reachable from the UI; noted in case it wants tightening server-side. (`/shifts/plan` is fine — it only ever touches the caller's own active shift.)
+- **Timer stop has no ownership check at the API layer** — the client only lets the member who started a timer stop it, but the endpoint itself would accept anyone's stop (of any timer, by id). Not reachable from the UI; noted in case it wants tightening server-side. (`/shifts/plan` is fine — it only ever touches the caller's own active shift.)
 
 ## Shift-system edges
 

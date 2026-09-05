@@ -8,7 +8,7 @@ use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Attributes\Description;
 
-#[Description('Start (or replace) the household\'s single running timer. The rest of the household gets notified.')]
+#[Description('Start a timer. Timers stack — one per (type, child, starter); re-starting an identical session returns the one already running. The rest of the household gets notified.')]
 class StartTimer extends BabylogTool
 {
     public function schema(JsonSchema $schema): array

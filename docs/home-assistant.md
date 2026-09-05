@@ -32,10 +32,10 @@ One **household device** named "MyBabyNotes", plus one device per unarchived chi
 | Device | Entity | Kind | Notes |
 |---|---|---|---|
 | Household | On duty | sensor | Name of the on-duty member |
-| Household | Active timer | sensor | `none` / `nurse` / `pump` / `sleep` |
-| Household | Timer started | sensor (timestamp) | When the running timer started |
+| Household | Active timer | sensor | `none` / `nurse` / `pump` / `sleep` — the newest running timer; with several stacked, the full list rides the sensor's `timers` attribute (with `count`) |
+| Household | Timer started | sensor (timestamp) | When the newest running timer started |
 | Household | Last pump | sensor (timestamp) | |
-| Household | Stop timer | button | Stops the running timer |
+| Household | Stop timer | button | Stops the newest running timer (the one the sensor shows); an MQTT command with `timer_id` can stop a specific one |
 | Household | Start pump timer | button | |
 | Per child | Last feeding | sensor (timestamp) | Latest of bottle/nurse |
 | Per child | Last diaper | sensor (timestamp) | Latest of wet/dirty/both |
