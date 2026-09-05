@@ -1,7 +1,8 @@
-// The multi-timer Now screen: every running timer is its own row (a nursing
-// timer for one twin beside a sleep timer for the other), each stopped by id.
-// A row is inert until its owner taps it — the tap arms the Stop button — and
-// rows started by someone else never offer a Stop at all.
+// The multi-timer Now screen: every running timer is a card at the top (one-tap
+// Stop for its owner — it's already running, don't make them dig) AND, behind
+// the device-local timersInFeed toggle, a row holding its place in the Today
+// list, where a tap arms the two-step Stop. Timers started by someone else
+// never offer a Stop anywhere.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -67,18 +68,20 @@ const twoTimers = () => [
 ]
 
 describe('multi-timer rows', () => {
-  it('renders one row per running timer, naming who started it', async () => {
+  it('renders a top card per running timer, with one-tap Stop only on mine', async () => {
     seedSignedIn()
     routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
     renderApp()
 
     expect(await screen.findByText('Nursing · You')).toBeInTheDocument()
     expect(screen.getByText('Sleep · Kat')).toBeInTheDocument()
-    // both rows idle: no Stop button until a row is tapped
+    // my card stops in one tap — the button is right there; Kat's never has one
+    expect(screen.getByText('Stop')).toBeInTheDocument()
+    // the two-step "Stop timer" only appears after arming a Today row
     expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
   })
 
-  it('tap arms the row, Stop stops that timer by id and logs the entry', async () => {
+  it('one tap on my top card stops that timer by id and logs the entry', async () => {
     const user = userEvent.setup()
     seedSignedIn()
     let stopBody, pushed
@@ -87,11 +90,11 @@ describe('multi-timer rows', () => {
     routes['POST /entries'] = opts => { pushed = JSON.parse(opts.body); return okJson({ ok: true }) }
     renderApp()
 
-    await user.click(await screen.findByText('Nursing · You'))
-    await user.click(screen.getByText('Stop timer'))
+    await screen.findByText('Nursing · You')
+    await user.click(screen.getByText('Stop'))
 
     expect(stopBody).toEqual({ id: 't-nurse' })
-    // only my row went away — Kat's sleep timer keeps running
+    // only my card went away — Kat's sleep timer keeps running
     expect(screen.queryByText('Nursing · You')).not.toBeInTheDocument()
     expect(screen.getByText('Sleep · Kat')).toBeInTheDocument()
     expect(await screen.findByText(/Nursing logged/)).toBeInTheDocument()
@@ -101,14 +104,45 @@ describe('multi-timer rows', () => {
     expect(pushed.entries[0].detail).toMatch(/· 2m$/)
   })
 
+  it('a Today-list row holds the timer too: tap arms it, Stop timer stops it', async () => {
+    const user = userEvent.setup()
+    seedSignedIn()
+    let stopBody
+    routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
+    routes['POST /timer/stop'] = opts => { stopBody = JSON.parse(opts.body); return okJson({ ok: true, stopped: null }) }
+    routes['POST /entries'] = () => okJson({ ok: true })
+    renderApp()
+
+    // the feed rows carry the bare type labels (the top cards say "· You"/"· Kat")
+    await user.click(await screen.findByText('Nursing'))
+    await user.click(screen.getByText('Stop timer'))
+
+    expect(stopBody).toEqual({ id: 't-nurse' })
+    expect(await screen.findByText(/Nursing logged/)).toBeInTheDocument()
+  })
+
   it('a timer someone else started never offers Stop', async () => {
     const user = userEvent.setup()
     seedSignedIn()
+    routes['GET /state'] = () => okJson(stateFixture({ timers: [twoTimers()[1]] }))
+    renderApp()
+
+    // Kat's top card has no Stop, and tapping her Today row arms nothing
+    await screen.findByText('Sleep · Kat')
+    expect(screen.queryByText('Stop')).not.toBeInTheDocument()
+    await user.click(screen.getByText('Sleep'))
+    expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
+  })
+
+  it('the timersInFeed toggle hides the Today rows but keeps the top cards', async () => {
+    seedSignedIn({ timersInFeed: false })
     routes['GET /state'] = () => okJson(stateFixture({ timers: twoTimers() }))
     renderApp()
 
-    await user.click(await screen.findByText('Sleep · Kat'))
-    expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
+    expect(await screen.findByText('Nursing · You')).toBeInTheDocument()
+    // no feed rows: the bare labels don't appear anywhere (entries are empty)
+    expect(screen.queryByText('Nursing')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sleep')).not.toBeInTheDocument()
   })
 
   it('a pre-multi-timer server (singular `timer` key only) still renders its row', async () => {

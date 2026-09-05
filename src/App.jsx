@@ -175,7 +175,7 @@ const STORE_KEY = 'babylog:v2'
 const PERSIST = ['screen', 'authMode', 'entries', 'babyName', 'nameField', 'inviteField', 'age',
   'me', 'partner', 'invitePending', 'inviteCode', 'inviteMailed', 'onDutyUserId', 'serverShift', 'dismissedShiftId',
   'outbox', 'lastSync', 'plan', 'until', 'handbackNote', 'settings', 'settingsDirty', 'babyBirthdate',
-  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimers', 'timerSides',
+  'notifyPrefs', 'notifyPrefsDirty', 'vapidKey', 'activeTimers', 'timerSides', 'timersInFeed',
   // multi-child household: the lists sync via /state; selectedChildId is a
   // DEVICE-LOCAL viewing preference (null = primary child) and never syncs
   'children', 'members', 'selectedChildId',
@@ -231,8 +231,11 @@ export default class App extends React.Component {
       sheet: false, sel: null, offset: 0, pickedT: null, detail: null, detail2: null, editId: null, historyDay: null, scrubDrag: null,
       // concurrent timers (twins!): [{id, type, started_at, user_id, baby_id}]
       // in start order; timerSides remembers each nurse timer's pre-picked side
-      // by timer id; stopArmId = the row tapped open to reveal its Stop button
-      activeTimers: [], timerSides: {}, stopArmId: null, manualDur: false,
+      // by timer id. The top-of-Now cards stop in one tap; timersInFeed is a
+      // DEVICE-LOCAL toggle (like selectedChildId) that also weaves running
+      // timers into the Today list, where stopArmId = the row tapped open to
+      // reveal its Stop button
+      activeTimers: [], timerSides: {}, stopArmId: null, timersInFeed: true, manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
       toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -1725,11 +1728,33 @@ export default class App extends React.Component {
       const m = showBy ? this.memberById(e.by) : null
       return m ? { initial: initial(m.name), name: m.name, color: this.memberColor(m.id) } : null
     }
-    const timeline = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
-      time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
+    const entryRows = [...live].sort((a, b) => b.t - a.t).slice(0, 12).map(e => ({
+      t: e.t, time: this.clock(e.t), label: T(e.type).label, sub: this.subFor(e),
       icon: T(e.type).icon, color: T(e.type).color, onEdit: this.edit(e.id),
       pending: pendingIds.has(e.id), byChip: byChipFor(e),
     }))
+    // running timers woven into the Today list at their start time (the
+    // device-local timersInFeed toggle) — a live elapsed sub, and the previous
+    // two-step stop: tapping your own row arms its Stop button
+    const feedTimerRows = s.timersInFeed ? s.activeTimers.map(t => {
+      const tt = T(t.type)
+      const mine = !!(s.me && t.user_id === s.me.id)
+      const child = kids.length > 1
+        ? ((s.children || []).find(c => c.id === (t.baby_id ?? this.primaryChildId()))?.name || '')
+        : ''
+      return {
+        timer: true, id: t.id, mine,
+        t: t.started_at, time: this.clock(t.started_at), label: tt.label,
+        sub: this.stopwatch(Date.now() - t.started_at)
+          + (child ? ' · ' + child : '')
+          + (mine ? '' : ' · ' + this.memberName(t.user_id, 'your partner')),
+        icon: tt.icon, color: tt.color,
+        armed: s.stopArmId === t.id,
+        onTap: mine ? () => this.setState(x => ({ stopArmId: x.stopArmId === t.id ? null : t.id })) : undefined,
+        onStop: () => this.stopTimer(t.id),
+      }
+    }) : []
+    const timeline = [...entryRows, ...feedTimerRows].sort((a, b) => b.t - a.t)
 
     // every day on the device, grouped for the History drill-down
     const fmtDay = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
@@ -2035,11 +2060,11 @@ export default class App extends React.Component {
       toManual: () => this.setState({ manualDur: true }),
       toTimer: () => this.setState({ manualDur: false }),
       manualHint: st.key === 'nurse' ? 'Log a past feed' : st.key === 'sleep' ? 'Log a past sleep' : 'Log a past session',
-      // running-timer rows on Now — one per concurrent timer, in start order so
-      // rows stay put as new ones append. With 2+ unarchived children each row
-      // names its child (null baby_id = primary, same rule as entries). A row
-      // shows a live timer glyph until its owner taps it, which arms the Stop
-      // button; the second tap stops and logs.
+      // running-timer cards at the top of Now — one per concurrent timer, in
+      // start order so cards stay put as new ones append. With 2+ unarchived
+      // children each names its child (null baby_id = primary, same rule as
+      // entries). These are already running, so your own card stops in ONE tap;
+      // the two-step stop lives on the Today-list rows (timersInFeed).
       timers: s.activeTimers.map(t => {
         const tt = T(t.type)
         return {
@@ -2052,8 +2077,6 @@ export default class App extends React.Component {
           elapsed: this.stopwatch(Date.now() - t.started_at),
           mine: !!(me && t.user_id === me.id),
           who: t.user_id === me?.id ? 'You' : this.memberName(t.user_id, partnerName),
-          armed: s.stopArmId === t.id,
-          arm: () => this.setState(x => ({ stopArmId: x.stopArmId === t.id ? null : t.id })),
           stop: () => this.stopTimer(t.id),
         }
       }),
@@ -2224,6 +2247,9 @@ export default class App extends React.Component {
           key, label, on: (s.fx.mode || 'auto') === key, onTap: () => this.setFxMode(key),
         })),
         tilt: { on: !!s.fx.tilt, onToggle: this.toggleTilt },
+        // device-local like theme/tilt: whether running timers also hold a row
+        // in the Today list (the top-of-Now cards always show)
+        timersFeed: { on: !!s.timersInFeed, onToggle: () => this.setState(x => ({ timersInFeed: !x.timersInFeed })) },
       },
       exportLog: this.exportLog, exportSummary: this.exportSummary,
       importBB: e => this.importBabyBuddy(e.currentTarget), importBusy: s.importBusy,
@@ -2581,7 +2607,7 @@ export default class App extends React.Component {
             <div style={S('flex:1;overflow:auto;padding:0 16px 20px;min-height:0')}>
 
               {v.timers.map(t => (
-                <div key={t.id} onClick={t.mine ? t.arm : undefined} style={S(`background:#FFFDF8;border:1px solid ${t.color};border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:13px;position:relative;overflow:hidden${t.mine ? ';cursor:pointer' : ''}`)}>
+                <div key={t.id} style={S(`background:#FFFDF8;border:1px solid ${t.color};border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:13px;position:relative;overflow:hidden`)}>
                   <div style={S(`position:absolute;inset:0;opacity:0.06;background:${t.color}`)} />
                   <div style={S('position:relative;width:42px;height:42px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
                     <div style={S(`position:absolute;inset:0;background:${t.color};opacity:0.18`)} />
@@ -2591,10 +2617,10 @@ export default class App extends React.Component {
                     <div style={S('font-size:15px;font-weight:700;letter-spacing:-0.01em')}>{t.label}{t.child ? ' · ' + t.child : ''} · {t.who}</div>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:700;font-size:24px;letter-spacing:-0.03em;color:#3D392F;font-variant-numeric:tabular-nums")}>{t.elapsed}</div>
                   </div>
-                  {t.armed && t.mine ? (
-                    <button type="button" onClick={e => { e.stopPropagation(); t.stop() }} className="hov-dark" style={S('position:relative;height:44px;padding:0 18px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
+                  {t.mine ? (
+                    <button type="button" onClick={t.stop} className="hov-dark" style={S('position:relative;height:44px;padding:0 20px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:7px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
                       <Sym style={{ fontSize: 18, color: 'var(--bg)' }}>stop</Sym>
-                      <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop timer</div>
+                      <div style={S('font-size:14px;font-weight:700;color:#FAF6EF')}>Stop</div>
                     </button>
                   ) : (
                     <Sym style={{ position: 'relative', fontSize: 22, color: t.color, flexShrink: 0 }}>timer</Sym>
@@ -2730,7 +2756,29 @@ export default class App extends React.Component {
                 {v.timeline.length === 0 && (
                   <div style={S('padding:22px 16px;text-align:center;font-size:13.5px;color:#B5AC98;text-wrap:pretty')}>Nothing logged yet — tap + and you’re three taps from done.</div>
                 )}
-                {v.timeline.map((e, i) => (
+                {v.timeline.map((e, i) => e.timer ? (
+                  // a running timer holding its place in the day — tap arms the
+                  // in-row Stop (the two-step flow); the top card is the one-tap
+                  <div key={'timer-' + e.id} onClick={e.onTap} style={S(`width:100%;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;text-align:left${e.mine ? ';cursor:pointer' : ''}`)}>
+                    <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
+                    <div style={S('position:relative;width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
+                      <div style={S(`position:absolute;inset:0;background:${e.color};opacity:0.16`)} />
+                      <Sym style={{ position: 'relative', fontSize: 19, color: e.color }}>{e.icon}</Sym>
+                    </div>
+                    <div style={S('flex:1;min-width:0;display:flex;flex-direction:column;gap:1px')}>
+                      <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
+                      <div style={S('font-size:11.5px;color:#8C8474;font-variant-numeric:tabular-nums')}>{e.sub}</div>
+                    </div>
+                    {e.armed && e.mine ? (
+                      <button type="button" onClick={ev => { ev.stopPropagation(); e.onStop() }} className="hov-dark" style={S('height:34px;padding:0 14px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
+                        <Sym style={{ fontSize: 15, color: 'var(--bg)' }}>stop</Sym>
+                        <div style={S('font-size:12.5px;font-weight:700;color:#FAF6EF')}>Stop timer</div>
+                      </button>
+                    ) : (
+                      <Sym style={{ fontSize: 18, color: e.color, flexShrink: 0 }}>timer</Sym>
+                    )}
+                  </div>
+                ) : (
                   <button key={i} type="button" onClick={e.onEdit} className="hov-row" style={S('width:100%;background:none;border:none;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;cursor:pointer;text-align:left;font-family:inherit')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
                     <div style={S('position:relative;width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
@@ -3125,7 +3173,17 @@ export default class App extends React.Component {
                     <Sym style={{ fontSize: 22, color: v.appearance.tilt.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.tilt.on ? 'toggle_on' : 'toggle_off'}</Sym>
                   </button>
                 </div>
-                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.canManage ? 'Colors are shared with your partner. Theme and tilt stay on this phone.' : 'Theme and tilt stay on this phone — colors are the household’s, set by a parent.'}</div>
+                <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 25)' }}>timer</Sym>
+                  <div style={S('flex:1')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Timers in Today</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Running timers also hold a row in the Today list</div>
+                  </div>
+                  <button type="button" onClick={v.appearance.timersFeed.onToggle} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                    <Sym style={{ fontSize: 22, color: v.appearance.timersFeed.on ? 'var(--accent)' : 'var(--dim)' }}>{v.appearance.timersFeed.on ? 'toggle_on' : 'toggle_off'}</Sym>
+                  </button>
+                </div>
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>{v.canManage ? 'Colors are shared with your partner. Theme, tilt, and timers-in-Today stay on this phone.' : 'Theme, tilt, and timers-in-Today stay on this phone — colors are the household’s, set by a parent.'}</div>
               </div>
 
               {v.canManage && (
