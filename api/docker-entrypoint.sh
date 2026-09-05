@@ -17,6 +17,10 @@ php artisan migrate --force
 # reminder pushes (feed gap / wake window / meds) ride the scheduler; per-minute
 # chatter goes to /dev/null but errors stay on stderr
 php artisan schedule:work >/dev/null &
+# Home Assistant / MQTT command listener + availability. Safe to run always:
+# it idles when no household has MQTT configured, and its internal loop never
+# exits (that loop is the supervision here, same tradeoff as the scheduler)
+php artisan mqtt:listen >/dev/null &
 # nginx self-daemonizes and just translates HTTP→FastCGI; php-fpm is the
 # process that matters, so it keeps the foreground — if it dies, the
 # container dies and docker's restart policy brings the pair back

@@ -33,7 +33,7 @@ Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Scrip
 
 ## Backups
 
-The entire state is one file: `/mnt/user/appdata/baby-log/data/database.sqlite` (plus `.env` for the secrets). Unraid's **Appdata Backup** plugin covers `appdata/baby-log` if installed — verify it's included in its share list. Manual restore: stop api+reverb, replace the sqlite file, start.
+The entire state is one file: `/mnt/user/appdata/baby-log/data/database.sqlite` (plus `.env` for the secrets — and `.env` matters more than it used to: `APP_KEY` now also encrypts the stored MQTT broker password, so restoring the database under a different key breaks the Home Assistant integration until it's re-configured). Unraid's **Appdata Backup** plugin covers `appdata/baby-log` if installed — verify it's included in its share list. Manual restore: stop api+reverb, replace the sqlite file, start.
 
 On a generic Docker Compose install (the repo-root compose file), the database lives in the **named volume** `babylog-db`, not a host path — back it up with e.g. `docker run --rm -v babylog-db:/data -v "$PWD:/backup" alpine cp /data/database.sqlite /backup/`, plus your `.env`.
 
@@ -104,11 +104,19 @@ docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:
 
 Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:3500` — different origins, separate sessions.
 
+## MQTT listener (Home Assistant)
+
+The [Home Assistant integration](home-assistant.md) needs a long-lived `php artisan mqtt:listen` process (command topics + availability via Last Will). It runs automatically in every deployment shape — backgrounded by `api/docker-entrypoint.sh` in the compose stacks (same supervision tradeoff as `schedule:work`), a supervisord program in the AIO image — and idles when no household has MQTT enabled, so there is nothing to configure or turn off. If HA entities go `unavailable`, this process (or the broker) is what's down.
+
 ## CI / images
 
 `.github/workflows/build-images.yml`: on every push to `main` (or manual `workflow_dispatch`), runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/mybabynotes-app` and `…-api` (`:main` + commit SHA).
 
 `.github/workflows/release.yml`: pushing a `v*` tag runs the same test suite, then builds and pushes all three images — `mybabynotes-app`, `mybabynotes-api`, and `mybabynotes-aio` — tagged `:vX.Y.Z` **and** `:latest` (releases own `:latest`; `main` builds never touch it), then creates a GitHub Release with generated notes, a `git archive` source tarball (`mybabynotes-vX.Y.Z.tar.gz`), and its sha256 in `checksums.txt`. The Unraid updater consumes that tarball + checksum; the images are the basis for the Unraid Community Apps template.
+
+### Home Assistant add-on release flow
+
+[deploy/ha-addon/](../deploy/ha-addon/) is the **source of truth** for the add-on; the `straplocked/mybabynotes-hassio-addons` repo users add to HA is only a publish target. On a `v*` tag, `release.yml` builds the per-arch add-on images (`ghcr.io/straplocked/mybabynotes-ha-addon-{amd64,aarch64}`, layered on the multi-arch AIO image), then stamps the tag into `config.yaml`'s `version` and pushes the manifest/docs/icons to the addons repo. That last job needs the **`ADDONS_REPO_TOKEN`** repository secret — a fine-grained PAT with `contents: write` on the addons repo — and skips with a warning until it exists. Never edit the addons repo by hand; change `deploy/ha-addon/` and tag.
 
 ### Repo-rename migration (baby-log → mybabynotes) — production checklist
 
@@ -122,7 +130,7 @@ The GitHub repo was renamed `straplocked/baby-log` → `straplocked/mybabynotes`
 
 ## All-in-one image (Community Apps)
 
-[deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` fastcgi + `/app` ws proxy on port 80), php-fpm, Reverb, and `schedule:work` running; everything else matches the three-container compose stack.
+[deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` fastcgi + `/app` ws proxy on port 80), php-fpm, Reverb, `schedule:work`, and `mqtt:listen` running; everything else matches the three-container compose stack.
 
 ```bash
 docker build -f deploy/aio/Dockerfile -t mybabynotes-aio .        # from the repo root
@@ -143,5 +151,6 @@ docker run -d -p 3500:80 -v /path/to/data:/data mybabynotes-aio
 | 500s from `/api` | `docker logs baby-log-api` (Laravel logs to stderr) |
 | "invite-only" on a legit partner signup | Exact email match required (lowercased) + the code from the invite toast; re-invite to regenerate a code |
 | Update script fails on compose | Compose Manager plugin must be installed (provides `docker compose`) |
-| Wrong/lost secrets | `.env` in appdata; APP_KEY changes invalidate nothing critical (tokens are hashed, not encrypted) but keep it stable anyway |
-| A phone suddenly asks to log in again | Expected every ~90 days — API tokens expire 90 days after login (counted from login, not last use); logging back in is the whole fix |
+| Wrong/lost secrets | `.env` in appdata; keep APP_KEY stable — tokens survive a change (hashed, not encrypted) but the stored MQTT broker password does not (encrypted column) — re-enter it in Settings → Home Assistant after a key change |
+| HA entities `unavailable` or buttons dead | The `mqtt:listen` process inside the api container is down or can't reach the broker — check `docker logs baby-log-api` (or the AIO container) and Settings → Home Assistant → Test connection. See [home-assistant.md](home-assistant.md#troubleshooting) |
+| A phone suddenly asks to log in again | Only happens after ~90 days of *not using the app* — token expiry slides from last use, so a device in regular use never ages out; logging back in is the whole fix |

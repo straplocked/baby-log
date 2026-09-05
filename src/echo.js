@@ -4,6 +4,7 @@
 // path whether the trigger was a socket, a poll, or a reconnect.
 import Echo from 'laravel-echo'
 import Pusher from 'pusher-js'
+import { APP_BASE } from './base.js'
 
 window.Pusher = Pusher
 
@@ -20,9 +21,13 @@ export function startEcho(token, householdId, { onPoke, onConnect }) {
     wsHost: window.location.hostname,
     wsPort: port,
     wssPort: port,
+    // '' at the origin root (pusher-js's own default → ws hits /app/<key>);
+    // under HA ingress the prefix keeps the socket inside the session, so
+    // nginx still sees /app/<key> once ingress strips it
+    wsPath: APP_BASE.replace(/\/$/, ''),
     forceTLS: window.location.protocol === 'https:',
     enabledTransports: ['ws', 'wss'],
-    authEndpoint: '/api/broadcasting/auth',
+    authEndpoint: APP_BASE + 'api/broadcasting/auth',
     auth: { headers: { Authorization: 'Bearer ' + token } },
   })
   echo.private('household.' + householdId).listen('HouseholdTouched', onPoke)

@@ -1,0 +1,40 @@
+<?php
+
+namespace App\Mcp\Tools;
+
+use App\Services\TimerService;
+use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Laravel\Mcp\Request;
+use Laravel\Mcp\Response;
+use Laravel\Mcp\Server\Attributes\Description;
+
+#[Description('Start (or replace) the household\'s single running timer. The rest of the household gets notified.')]
+class StartTimer extends BabylogTool
+{
+    public function schema(JsonSchema $schema): array
+    {
+        return [
+            'type' => $schema->string()->enum(['nurse', 'pump', 'sleep'])->description('What the timer tracks.')->required(),
+            'baby_id' => $schema->integer()->description('Which child (default: the primary child).'),
+        ];
+    }
+
+    public function handle(Request $request): Response
+    {
+        if ($denied = $this->requireAbilities($request, 'timer:write')) {
+            return $denied;
+        }
+
+        if (! in_array($request->get('type'), ['nurse', 'pump', 'sleep'], true)) {
+            return Response::error('type must be nurse, pump, or sleep.');
+        }
+
+        $timer = app(TimerService::class)->start(
+            $this->user($request),
+            (string) $request->get('type'),
+            $request->get('baby_id') !== null ? (int) $request->get('baby_id') : null,
+        );
+
+        return Response::json(['timer' => $timer]);
+    }
+}

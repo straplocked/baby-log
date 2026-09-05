@@ -1,0 +1,34 @@
+# Home Assistant add-on manifest. This directory is the SOURCE OF TRUTH; the
+# straplocked/mybabynotes-hassio-addons repo is a publish target that CI
+# stamps from here on tagged releases (see .github/workflows/release.yml).
+name: MyBabyNotes
+version: "0.0.0-dev" # stamped with the release tag by CI; local sideloads build as-is
+slug: mybabynotes
+description: Two-parent baby tracker — log feeds, diapers, sleep and shifts together
+url: https://github.com/straplocked/mybabynotes
+arch:
+  - amd64
+  - aarch64
+init: false
+# the whole household should see it in the sidebar, not just HA admins
+ingress: true
+ingress_port: 80
+ingress_stream: true # websocket (Reverb) rides ingress
+panel_icon: mdi:baby-bottle-outline
+panel_title: MyBabyNotes
+panel_admin: false
+# off by default; open it for the installable PWA + web push on phones
+# (inside ingress the service worker is deliberately disabled)
+ports:
+  80/tcp: null
+ports_description:
+  80/tcp: Direct LAN access — lets phones install MyBabyNotes as an app with push notifications
+map: []
+options:
+  mode: local
+  remote_url: ""
+schema:
+  mode: list(local|remote)
+  remote_url: str?
+watchdog: http://[HOST]:[PORT:80]/
+image: ghcr.io/straplocked/mybabynotes-ha-addon-{arch}

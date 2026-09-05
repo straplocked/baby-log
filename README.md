@@ -35,11 +35,19 @@
 | Shift handoffs | First-class: request → plan → handback summary | — |
 | Household model | Up to 6 adults (parent/caregiver roles), up to 10 children | Many caregivers, multiple children |
 | Tracking breadth | 9 focused entry types | Broader: tummy time, growth + WHO percentiles, notes, more |
-| Integrations | CSV export; imports Baby Buddy CSV | REST API, Home Assistant, companion mobile apps |
+| Integrations | Versioned REST API + OpenAPI spec, Home Assistant (MQTT devices + ingress add-on), built-in MCP server, CSV export; imports Baby Buddy CSV | REST API, Home Assistant, companion mobile apps, MCP (separate container) |
 | Languages | English only (so far) | 9 years of i18n, many languages |
 | License | AGPL-3.0 | BSD-2-Clause |
 
-If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. mybabynotes optimizes for a narrower job: exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
+If you want growth charts, WHO percentiles, or a non-English UI, run Baby Buddy — it's good software with nearly a decade of work behind it. mybabynotes optimizes for a narrower job: exhausted adults logging offline at 3am, seeing each other's entries instantly, and handing the baby off without a status interview. If that's your job, and you're switching, Settings → Import will read the CSV files Baby Buddy exports.
+
+## Integrations
+
+Three surfaces, all writing through the same server-side path as the app — an integration's entry syncs to every phone instantly and obeys the same rules:
+
+- **REST API** ([docs/integrations.md](docs/integrations.md)) — a stable, versioned `/api/v1` with scoped personal access tokens (created in Settings → API access) and a committed, CI-enforced OpenAPI spec ([docs/openapi.v1.json](docs/openapi.v1.json)) to point a client generator at.
+- **Home Assistant** ([docs/home-assistant.md](docs/home-assistant.md)) — the household appears as HA devices via MQTT discovery (last-feeding/diaper/sleep sensors, quick-log and timer buttons), and an add-on puts the app itself in the HA sidebar via ingress — either running MyBabyNotes on the HA box or embedding an instance you already run elsewhere.
+- **MCP** ([docs/mcp.md](docs/mcp.md)) — an MCP server built into the API at `/mcp` (no extra container): Claude and other AI clients can answer "how did last night go?", log entries, and run timers, gated by the same token scopes.
 
 ## Install
 
@@ -71,7 +79,17 @@ cp .env.example .env    # fill in APP_KEY + REVERB_APP_SECRET (generation comman
 docker compose up -d --build    # http://localhost:3500
 ```
 
-### 4. Local development
+### 4. Home Assistant add-on
+
+Runs MyBabyNotes on a Home Assistant OS box, in the HA sidebar via ingress, with its data riding HA's own backups — or, in remote mode, embeds an instance you already run elsewhere. Add the repository under Settings → Add-ons → Add-on Store → Repositories:
+
+```
+https://github.com/straplocked/mybabynotes-hassio-addons
+```
+
+then install **MyBabyNotes** from the store. Details (modes, MQTT sensors, phones/PWA): [docs/home-assistant.md](docs/home-assistant.md).
+
+### 5. Local development
 
 Same as above — the root compose file is the full stack. The API test suite runs in a container (no host PHP needed):
 
@@ -92,7 +110,11 @@ Releases are tagged: a `v*` tag runs the test suite, publishes `ghcr.io/straploc
 | Doc | What's in it |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System design, sync model, realtime, notifications, shift semantics, key decisions |
-| [docs/api.md](docs/api.md) | Every endpoint with payloads, rules, and error behavior |
+| [docs/integrations.md](docs/integrations.md) | The public REST API (`/api/v1`): tokens, scopes, endpoints, entry semantics |
+| [docs/openapi.v1.json](docs/openapi.v1.json) | Machine-readable OpenAPI spec for `/api/v1`, generated from the code and CI-enforced |
+| [docs/home-assistant.md](docs/home-assistant.md) | MQTT entities + automations, and the ingress add-on (local/remote modes) |
+| [docs/mcp.md](docs/mcp.md) | The built-in MCP server: auth, client setup, tool reference |
+| [docs/api.md](docs/api.md) | The internal PWA/sync API — every endpoint with payloads, rules, and error behavior |
 | [docs/operations.md](docs/operations.md) | Unraid runbook: update, reset, backups, reverse proxy, local dev, troubleshooting |
 | [docs/ca-submission.md](docs/ca-submission.md) | Community Apps submission checklist + support-thread draft |
 | [docs/known-limitations.md](docs/known-limitations.md) | Honest gaps + candidate roadmap |

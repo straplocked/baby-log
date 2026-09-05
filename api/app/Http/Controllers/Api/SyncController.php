@@ -5,13 +5,12 @@ namespace App\Http\Controllers\Api;
 use App\Events\HouseholdTouched;
 use App\Http\Controllers\Controller;
 use App\Mail\PartnerInvite;
-use App\Models\Entry;
 use App\Models\User;
+use App\Services\EntryWriter;
 use App\Services\PushService;
 use App\Support\AppMail;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 
 class SyncController extends Controller
@@ -354,7 +353,7 @@ class SyncController extends Controller
     }
 
     /** Batch upsert from the client outbox. Client ids win; latest write wins. */
-    public function pushEntries(Request $request): JsonResponse
+    public function pushEntries(Request $request, EntryWriter $writer): JsonResponse
     {
         $data = $request->validate([
             'entries' => ['required', 'array', 'max:500'],
@@ -366,90 +365,8 @@ class SyncController extends Controller
             'entries.*.baby_id' => ['nullable', 'integer'],
         ]);
 
-        $user = $request->user();
-        $rev = now()->getTimestampMs();
-
-        // which child ids this household may write against; first (oldest) is
-        // the primary child old clients mean when they send no baby_id at all
-        $childIds = $user->household->children()->pluck('id')->all();
-        $primaryChildId = $childIds[0] ?? null;
-
-        foreach ($data['entries'] as $e) {
-            $existing = Entry::where('id', $e['id'])->first();
-            if ($existing && $existing->household_id !== $user->household_id) {
-                continue; // id collision across households — ignore
-            }
-            // a baby_id from another household is dropped, never stored: the
-            // write then behaves as if the field were absent (default on
-            // create, preserve on update)
-            $babyId = isset($e['baby_id']) && in_array((int) $e['baby_id'], $childIds, true)
-                ? (int) $e['baby_id']
-                : ($existing->baby_id ?? $primaryChildId);
-            Entry::updateOrCreate(
-                ['id' => $e['id']],
-                [
-                    'household_id' => $user->household_id,
-                    'user_id' => $existing->user_id ?? $user->id,
-                    'baby_id' => $babyId,
-                    'type' => $e['type'],
-                    't' => $e['t'],
-                    'detail' => isset($e['detail']) ? (string) $e['detail'] : null,
-                    'deleted' => (bool) ($e['deleted'] ?? false),
-                    'rev' => $rev++,
-                ],
-            );
-        }
-
-        HouseholdTouched::send($user->household_id, 'entries');
-        $this->pingOthers($user, $data['entries']);
+        $writer->upsert($request->user(), $data['entries']);
 
         return response()->json(['ok' => true, 'serverTime' => now()->getTimestampMs()]);
-    }
-
-    private const TYPE_LABELS = [
-        'bottle' => 'a bottle', 'nurse' => 'nursing', 'pump' => 'a pump',
-        'wet' => 'a wet diaper', 'dirty' => 'a dirty diaper', 'both' => 'a diaper',
-        'sleep' => 'sleep', 'bath' => 'a bath', 'meds' => 'meds',
-    ];
-
-    /**
-     * "Katrina logged a bottle" — opt-in activity push to every other member,
-     * throttled per recipient to one ping per 10 minutes so a backfill burst
-     * doesn't rattle anyone's phone.
-     */
-    private function pingOthers(User $user, array $entries): void
-    {
-        $live = array_values(array_filter($entries, fn ($e) => empty($e['deleted'])));
-        if (! $live) {
-            return;
-        }
-        $first = $live[0];
-        $label = self::TYPE_LABELS[$first['type']] ?? $first['type'];
-        $nowMs = now()->getTimestampMs();
-
-        foreach ($user->household->othersFor($user) as $other) {
-            if (! $other->notifyPrefs()['partner'] || $other->inQuietHours()) {
-                continue;
-            }
-            // the throttle marker lives in each recipient's own notify_state
-            $state = $other->notify_state ?? [];
-            if (($state['partnerPingAt'] ?? 0) > $nowMs - 10 * 60000) {
-                continue;
-            }
-            $other->update(['notify_state' => array_merge($state, ['partnerPingAt' => $nowMs])]);
-
-            $tz = $other->notifyPrefs()['tz'] ?: config('app.timezone');
-            try {
-                $at = Carbon::createFromTimestampMs($first['t'], $tz)->format('g:i A');
-            } catch (\Throwable) {
-                $at = Carbon::createFromTimestampMs($first['t'])->format('g:i A');
-            }
-            $bits = array_filter([
-                isset($first['detail']) && $first['detail'] !== '' ? (string) $first['detail'] : null,
-                $at,
-                count($live) > 1 ? '+'.(count($live) - 1).' more' : null,
-            ]);
-            app(PushService::class)->notify($other, 'partner', $user->name.' logged '.$label, implode(' · ', $bits));
-        }
     }
 }

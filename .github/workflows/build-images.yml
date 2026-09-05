@@ -31,6 +31,17 @@ jobs:
         env:
           BROADCAST_CONNECTION: log
         run: php artisan test --compact
+      # the committed spec must match the code — regenerate locally with the
+      # container command in CLAUDE.md if this fails
+      - name: OpenAPI spec is committed and current
+        working-directory: api
+        env:
+          DB_DATABASE: /tmp/scramble.sqlite
+        run: |
+          touch /tmp/scramble.sqlite
+          php artisan migrate --force -q
+          php artisan scramble:export --path=../docs/openapi.v1.json
+          git diff --exit-code -- ../docs/openapi.v1.json
 
   test-app:
     runs-on: ubuntu-latest

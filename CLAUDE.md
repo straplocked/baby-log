@@ -26,6 +26,11 @@ Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed
 - Realtime is **poke-to-pull**: broadcast `HouseholdTouched` (via its best-effort `::send()`, never raw `broadcast()`), client re-pulls `/state`. Never broadcast data payloads.
 - Every new write endpoint needs: auth + the 120/min throttle group, household scoping through `$request->user()->household`, a `HouseholdTouched::send()`, and a feature test in `api/tests/Feature/BabylogApiTest.php`. Parent-only endpoints also join `PARENT_ONLY_ENDPOINTS` in that test (the caregiver-403 sweep).
 - **Old-client compat is an invariant** (installed PWAs hit the new server before their JS updates): `/state` keeps the legacy singular `baby` (= primary child), `partner` (= first other member), and `invitePending` keys; `POST /entries` without `baby_id` defaults to the primary child on CREATE only and never re-homes an existing entry on update; a null `baby_id` always reads as the primary child.
+- **One write path**: all entry writes go through `App\Services\EntryWriter` and all timer mutations through `App\Services\TimerService` — never a second upsert loop. `/api/v1`, the MCP tools, and the MQTT command handler already do; new producers must too.
+- **New `/api/v1` endpoints** need an `ApiScopes` scope on the route, a feature test in `api/tests/Feature/ApiV1Test.php`, and a regenerated `docs/openapi.v1.json` (CI diff-fails a stale spec). Local regen:
+  `docker run --rm -v "$PWD:/repo" -w /repo/api -e DB_DATABASE=/tmp/scramble.sqlite composer:2 sh -c "touch /tmp/scramble.sqlite && php artisan migrate --force -q && php artisan scramble:export --path=../docs/openapi.v1.json"`
+- **MCP tools count as write endpoints**: scope check via `requireAbilities`, writes via the services above, feature test in `api/tests/Feature/McpTest.php` (including its caregiver/parent-only sweep).
+- **MQTT publishes are best-effort** and must never block or fail a write — they ride `HouseholdTouched::send()` (the publisher has a circuit breaker; keep it that way).
 
 ## Deploy
 

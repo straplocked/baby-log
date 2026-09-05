@@ -833,6 +833,8 @@ class BabylogApiTest extends TestCase
      * household-shaping endpoint joins this map or a caregiver can reach it.
      */
     private const PARENT_ONLY_ENDPOINTS = [
+        '/api/integrations/mqtt' => ['enabled' => true, 'host' => 'evil.example'],
+        '/api/integrations/mqtt/test' => ['host' => 'evil.example'],
         '/api/baby' => ['name' => 'Hijack'],
         '/api/children' => ['name' => 'Hijack'],
         '/api/settings' => ['unit' => 'ml'],

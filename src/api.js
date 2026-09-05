@@ -1,5 +1,7 @@
-// Thin client for the Laravel API. Same-origin /api (nginx proxies to the api container).
+// Thin client for the Laravel API. Same-origin api/ under the app base
+// (nginx proxies to the api container; base ≠ '/' only under HA ingress).
 import { socketId } from './echo'
+import { APP_BASE } from './base.js'
 
 const TOKEN_KEY = 'babylog:token'
 
@@ -7,7 +9,7 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY)
 export const setToken = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY)
 
 async function call(path, { method = 'GET', body } = {}) {
-  const res = await fetch('/api' + path, {
+  const res = await fetch(APP_BASE + 'api' + path, {
     method,
     headers: {
       Accept: 'application/json',
@@ -48,6 +50,12 @@ export const api = {
   pushSubscribe: b => call('/push/subscribe', { method: 'POST', body: b }), // {endpoint, keys:{p256dh,auth}, tz}
   pushUnsubscribe: endpoint => call('/push/unsubscribe', { method: 'POST', body: { endpoint } }),
   saveNotifyPrefs: prefs => call('/notify-prefs', { method: 'POST', body: prefs }),
+  tokens: () => call('/tokens'), // {tokens: [...], scopes: {key: label}} — deliberately not in /state
+  createToken: b => call('/tokens', { method: 'POST', body: b }), // {name, abilities, expires_in_days?} → plaintext token, shown once
+  revokeToken: id => call('/tokens/revoke', { method: 'POST', body: { id } }),
+  mqttGet: () => call('/integrations/mqtt'), // {config, status:{heartbeatAt}} — parents only, not in /state
+  mqttSave: b => call('/integrations/mqtt', { method: 'POST', body: b }), // omit password to keep the stored one
+  mqttTest: b => call('/integrations/mqtt/test', { method: 'POST', body: b }), // {ok, message?} — a 200 either way
   pushEntries: entries => call('/entries', { method: 'POST', body: { entries } }),
   timerStart: (type, babyId) => call('/timer/start', { method: 'POST', body: { type, ...(babyId != null ? { baby_id: babyId } : {}) } }), // baby_id absent → primary child
   timerStop: () => call('/timer/stop', { method: 'POST' }),

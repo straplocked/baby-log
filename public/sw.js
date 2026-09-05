@@ -2,9 +2,14 @@
    Navigations: network-first, cache fallback (3am logging never waits on signal).
    Assets + fonts: cache-first with background fill. */
 // bumping these purges old caches on activate — v1 served unhashed files
-// (manifest included) cache-first forever, so installs kept minting stale
-const SHELL = 'babylog-shell-v3'
-const RUNTIME = 'babylog-rt-v3'
+// (manifest included) cache-first forever, so installs kept minting stale;
+// v4: the base-path-relative build changed asset URL shapes
+const SHELL = 'babylog-shell-v4'
+const RUNTIME = 'babylog-rt-v4'
+
+// '/'-rooted paths below are deliberate: this worker only ever registers at
+// the origin root (main.jsx skips registration under HA ingress, where the
+// per-session cookie would poison these caches anyway)
 
 self.addEventListener('install', () => self.skipWaiting())
 

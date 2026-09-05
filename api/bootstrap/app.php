@@ -4,6 +4,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -11,6 +12,13 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // withRouting takes one api: file; the public versioned surface gets
+        // its own (same 'api' middleware group, or it loses JSON semantics)
+        then: function () {
+            Route::middleware('api')
+                ->prefix('api/v1')
+                ->group(base_path('routes/api_v1.php'));
+        },
     )
     ->withBroadcasting(
         __DIR__.'/../routes/channels.php',
@@ -24,9 +32,16 @@ return Application::configure(basePath: dirname(__DIR__))
         // guests to route('login'), which throws RouteNotFoundException (a 500)
         // for header-less probes; null lets the 401 render as JSON instead.
         $middleware->redirectGuestsTo(fn () => null);
+
+        // Sanctum token scopes for the public API and MCP; first-party app
+        // tokens carry ['*'] so these are no-ops for the PWA
+        $middleware->alias([
+            'abilities' => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,
+            'ability' => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
+            fn (Request $request) => $request->is('api/*') || $request->is('mcp') || $request->expectsJson(),
         );
     })->create();

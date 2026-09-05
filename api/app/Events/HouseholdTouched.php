@@ -35,6 +35,18 @@ class HouseholdTouched implements ShouldBroadcastNow
         } catch (\Throwable) {
             // socket server unreachable — clients converge on their fallback poll
         }
+
+        // Home Assistant fan-out rides the same choke point every mutation
+        // already goes through. (broadcast() bypasses event listeners, so this
+        // can't be a listener.) Unlike the websocket poke, MQTT carries state —
+        // different transport, different consumers; the poke-to-pull invariant
+        // is about our own clients and stays intact. No-op in ~1 cache read
+        // when MQTT isn't configured; never fails the write.
+        try {
+            app(\App\Services\Mqtt\MqttPublisher::class)->publishForHousehold($householdId, $kind);
+        } catch (\Throwable) {
+            // MQTT is a nicety — the publisher has its own guards, this is belt+braces
+        }
     }
 
     public function broadcastOn(): PrivateChannel

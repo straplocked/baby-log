@@ -1,5 +1,7 @@
 # API Reference
 
+This documents the **internal PWA/sync API** — the unversioned `/api/*` surface that is the app's own wire format. It is **private and unstable**: it changes whenever the app needs it to, and nothing outside this repo should depend on it. The public, stable contract for scripts and integrations is **`/api/v1`**, documented in [integrations.md](integrations.md) with a machine-readable spec at [openapi.v1.json](openapi.v1.json).
+
 Base path `/api`. JSON in/out (`Accept: application/json`). Authenticated routes take `Authorization: Bearer <token>` (Sanctum). Validation failures return `422` with `{message, errors}`; throttling returns `429`; missing/bad auth returns `401`.
 
 ## Auth
@@ -38,7 +40,33 @@ Revokes the current token.
 `{ email, password }` — requires the current password; wrong password or already-used email → 422. Returns `{ ok, email }`.
 
 ### `POST /account/password`
-`{ current_password, password (min 8) }` — wrong current password → 422. Revokes every **other** token (other devices sign out; the calling device stays in).
+`{ current_password, password (min 8) }` — wrong current password → 422. Revokes every **other** app token (other devices sign out; the calling device stays in). Personal access tokens survive a routine password change, GitHub-style; the forgot-password **reset** flow still revokes everything.
+
+## API tokens — auth + throttle 120/min, first-party session tokens only
+
+Management of the [public API's](integrations.md) personal access tokens (PATs). The routes carry `abilities:*`, so only a first-party app token (a logged-in session) can reach them — a PAT can never mint or revoke PATs.
+
+### `GET /tokens`
+The caller's PATs (`app` login tokens never appear): `{ tokens: [{id, name, abilities, createdAt, lastUsedAt, expiresAt}], scopes }` — `scopes` is the scope-name → description map for the Settings UI.
+
+### `POST /tokens`
+`{ name (≤40, ≠"app", unique per user), abilities (non-empty subset of the scope names), expires_in_days?: 30|90|365|null }` — default expiry 90 days; explicit `null` means no expiry. At most 10 PATs per user → 422. Returns `201 { ok, id, token }` — **the plaintext token appears only here**; only a hash is stored.
+
+### `POST /tokens/revoke`
+`{ id }` — deletes that PAT (only the caller's own; `app` tokens are untouchable here). Unknown id → 422.
+
+## Home Assistant / MQTT — auth + throttle 120/min, parents only (403 for caregivers)
+
+Settings for the [MQTT integration](home-assistant.md). Broker credentials are household infrastructure: stored encrypted server-side, never in `/state`, never synced to clients.
+
+### `GET /integrations/mqtt`
+`{ config, status: { heartbeatAt } }` — `config` is the stored broker settings with the password masked to a `hasPassword` flag; `heartbeatAt` is the listener's last check-in (null when it isn't connected).
+
+### `POST /integrations/mqtt`
+Any subset of `{ enabled, host, port, username, password, tls, tls_verify, discovery_prefix, base_topic, acting_user_id }`; provided keys merge over stored ones. A blank/absent `password` keeps the stored one (write-only field); enabling without a host → 422; an `acting_user_id` outside the household falls back to the caller. Enabling publishes discovery + full state immediately; disabling publishes retained removals so the HA devices disappear. Returns `{ ok, config }` (masked, as in GET).
+
+### `POST /integrations/mqtt/test`
+Same payload — tries the submitted credentials (blank password = stored one) against the broker without persisting anything. Returns `{ ok }` or `{ ok: false, message }`.
 
 ## Sync — all auth + throttle 120/min
 

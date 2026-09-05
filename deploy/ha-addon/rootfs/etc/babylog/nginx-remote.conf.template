@@ -1,0 +1,31 @@
+# Remote mode: the add-on is nothing but this proxy. HA's ingress hits us on
+# :80 with the /api/hassio_ingress/<token> prefix already stripped; we relay
+# to the household's real MyBabyNotes instance. The instance must run a
+# release with the base-path-relative frontend build (v1.1+) or its absolute
+# asset URLs will escape the ingress prefix.
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 1m;
+
+    # Reverb websocket
+    location /app {
+        proxy_pass __REMOTE_URL__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_ssl_server_name on;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        proxy_pass __REMOTE_URL__;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_read_timeout 300s;
+    }
+}

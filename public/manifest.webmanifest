@@ -2,15 +2,15 @@
   "name": "mybabynotes",
   "short_name": "mybabynotes",
   "description": "Three taps from pocket to logged. Both of you, one log.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": ".",
+  "scope": ".",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#FAF6EF",
   "color_scheme_dark": { "theme_color": "#1E1B16", "background_color": "#1E1B16" },
   "icons": [
-    { "src": "/icons/mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icons/face-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/face-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "icons/mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/face-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/face-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

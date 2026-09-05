@@ -74,9 +74,12 @@ class AccountController extends Controller
         }
 
         $user->forceFill(['password' => $data['password']])->save(); // hashed by the cast
-        // every other session dies with the old password; the phone making the
-        // change keeps its token so the user isn't logged out mid-settings
-        $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+        // every other *session* dies with the old password; the phone making
+        // the change keeps its token so the user isn't logged out mid-settings.
+        // Personal access tokens survive a routine password change (GitHub
+        // style) — forgot-password reset still revokes everything.
+        $user->tokens()->where('name', 'app')
+            ->where('id', '!=', $user->currentAccessToken()->id)->delete();
 
         HouseholdTouched::send($user->household->id, 'account');
 

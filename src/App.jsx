@@ -247,6 +247,12 @@ export default class App extends React.Component {
       // account editing (settings) — ephemeral, seeded from me/baby when the screen opens
       acctName: '', acctBabyName: '', acctOpen: null, // null | 'email' | 'password'
       acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '', acctBusy: false, acctError: null,
+      // API access (settings) — ephemeral; tokens are fetched on expand, never in /state
+      apiTokens: null, apiScopes: null, tokensOpen: false, tokenAddOpen: false,
+      tokenName: '', tokenScopes: [], tokenExpiry: 90, tokenBusy: false, tokenError: null,
+      newToken: null, revokeTokenArmId: null,
+      // Home Assistant / MQTT bridge (settings, parents only) — ephemeral, fetched on expand
+      mqttOpen: false, mqttCfg: null, mqttForm: null, mqttBusy: false, mqttTestResult: null, mqttError: null,
       notifyPrefs: null, notifyPrefsDirty: false, vapidKey: null, pushOn: false, pushBusy: false,
       shiftOpen: false, shiftIn: false, shiftLeaving: false, planDraft: null, planOff: [], until: 'Until she wakes', plan: [], handbackNote: '',
       fx: getFx(), // device-local (babylog:fx), not in PERSIST
@@ -600,6 +606,11 @@ export default class App extends React.Component {
       activeTimer: null, timerSide: null, manualDur: false,
       acctName: '', acctBabyName: '', acctOpen: null, acctError: null, acctBusy: false,
       acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
+      apiTokens: null, apiScopes: null, tokensOpen: false, tokenAddOpen: false,
+      tokenName: '', tokenScopes: [], tokenExpiry: 90, tokenBusy: false, tokenError: null,
+      newToken: null, revokeTokenArmId: null,
+      // Home Assistant / MQTT bridge (settings, parents only) — ephemeral, fetched on expand
+      mqttOpen: false, mqttCfg: null, mqttForm: null, mqttBusy: false, mqttTestResult: null, mqttError: null,
     })
   }
 
@@ -893,6 +904,108 @@ export default class App extends React.Component {
       })
       this.bumpToast()
     } catch (e) { this.acctFail(e) }
+  }
+
+  // ── API access (settings; every role — the server scopes tokens to their maker)
+  toggleTokens = () => {
+    const opening = !this.state.tokensOpen
+    this.setState({ tokensOpen: opening, revokeTokenArmId: null })
+    // lazy: tokens are deliberately not in /state — first expand pulls them
+    if (opening && this.state.apiTokens == null) this.fetchTokens()
+  }
+  fetchTokens = () => api.tokens()
+    .then(r => this.setState({ apiTokens: r.tokens, apiScopes: r.scopes }))
+    .catch(e => this.setState(e.status ? { tokenError: e.message || 'That didn’t go through — try again.' } : { offline: true }))
+  createApiToken = async () => {
+    const s = this.state
+    const name = s.tokenName.trim()
+    if (!name || !s.tokenScopes.length || s.tokenBusy) return
+    this.setState({ tokenBusy: true, tokenError: null })
+    try {
+      const r = await api.createToken({ name, abilities: s.tokenScopes, expires_in_days: s.tokenExpiry })
+      this.setState({
+        tokenBusy: false, tokenAddOpen: false, tokenName: '', tokenScopes: [], tokenExpiry: 90,
+        newToken: r.token, // plaintext — the server never shows it again
+      })
+      this.fetchTokens()
+    } catch (e) {
+      const first = e.errors ? Object.values(e.errors)[0]?.[0] : null
+      this.setState({
+        tokenBusy: false,
+        tokenError: e.status ? (first || e.message || 'That didn’t go through — try again.') : 'No signal — try again in a moment.',
+      })
+    }
+  }
+  revokeApiToken = id => {
+    this.setState(s => ({ revokeTokenArmId: null, apiTokens: (s.apiTokens || []).filter(t => t.id !== id) }))
+    api.revokeToken(id).then(() => this.fetchTokens()).catch(e => {
+      if (e.status) {
+        this.setState({ tokenError: e.message || 'That didn’t go through — try again.' })
+        this.fetchTokens() // fall back to server truth
+      } else this.setState({ offline: true })
+    })
+  }
+  copyApiToken = () => {
+    try { navigator.clipboard.writeText(this.state.newToken).catch(() => { /* stays on screen to copy by hand */ }) } catch { /* no clipboard API */ }
+    this.setState({ toast: 'Token copied — keep it somewhere safe', undoAction: null })
+    this.bumpToast()
+  }
+
+  // ── Home Assistant / MQTT bridge (settings; parents only — the server 403s caregivers)
+  toggleMqtt = () => {
+    const opening = !this.state.mqttOpen
+    this.setState({ mqttOpen: opening, mqttTestResult: null, mqttError: null })
+    // lazy: broker config is deliberately not in /state — first expand pulls it
+    if (opening && this.state.mqttCfg == null) this.fetchMqtt()
+  }
+  fetchMqtt = () => api.mqttGet()
+    .then(r => this.setState({
+      mqttCfg: { ...r.config, heartbeatAt: r.status?.heartbeatAt ?? null },
+      mqttForm: this.mqttFormFrom(r.config),
+    }))
+    .catch(e => this.setState(e.status ? { mqttError: e.message || 'That didn’t go through — try again.' } : { offline: true }))
+  mqttFormFrom(c) {
+    // password stays blank — an empty field means “keep the stored one” on save
+    return { enabled: !!c.enabled, host: c.host || '', port: c.port ?? 1883, username: c.username || '', password: '', tls: !!c.tls, tls_verify: c.tls_verify !== false }
+  }
+  mqttBody() {
+    const f = this.state.mqttForm
+    return {
+      enabled: f.enabled, host: f.host.trim(), port: f.port === '' ? null : Number(f.port),
+      username: f.username.trim(), ...(f.password ? { password: f.password } : {}),
+      tls: f.tls, tls_verify: f.tls_verify,
+    }
+  }
+  setMqttForm = patch => this.setState(s => ({ mqttForm: { ...s.mqttForm, ...patch }, mqttError: null, mqttTestResult: null }))
+  saveMqtt = async () => {
+    if (!this.state.mqttForm || this.state.mqttBusy) return
+    this.setState({ mqttBusy: true, mqttError: null, mqttTestResult: null })
+    try {
+      const r = await api.mqttSave(this.mqttBody())
+      this.setState(s => ({
+        mqttBusy: false,
+        mqttCfg: { ...r.config, heartbeatAt: s.mqttCfg?.heartbeatAt ?? null },
+        mqttForm: this.mqttFormFrom(r.config),
+      }))
+    } catch (e) {
+      this.setState({
+        mqttBusy: false,
+        mqttError: e.status ? (e.message || 'That didn’t go through — try again.') : 'No signal — try again in a moment.',
+      })
+    }
+  }
+  testMqtt = async () => {
+    if (!this.state.mqttForm || this.state.mqttBusy) return
+    this.setState({ mqttBusy: true, mqttError: null, mqttTestResult: null })
+    try {
+      const r = await api.mqttTest(this.mqttBody())
+      this.setState({ mqttBusy: false, mqttTestResult: r.ok ? { ok: true } : { ok: false, message: r.message || 'Couldn’t reach the broker.' } })
+    } catch (e) {
+      this.setState({
+        mqttBusy: false,
+        mqttError: e.status ? (e.message || 'That didn’t go through — try again.') : 'No signal — try again in a moment.',
+      })
+    }
   }
 
   trackOn(key) { return this.state.settings.tracking[key] !== false }
@@ -1809,6 +1922,9 @@ export default class App extends React.Component {
           acctName: me?.name || '', acctBabyName: s.babyName || '',
           acctOpen: null, acctError: null, acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
           childEdits: {}, childAddOpen: false, childAddName: '', childAddDob: '', removeConfirmId: null,
+          tokensOpen: false, tokenAddOpen: false, tokenName: '', tokenScopes: [], tokenExpiry: 90,
+          tokenError: null, newToken: null, revokeTokenArmId: null,
+          mqttOpen: false, mqttCfg: null, mqttForm: null, mqttBusy: false, mqttTestResult: null, mqttError: null,
         })
       },
       settingsBack: () => {
@@ -2171,6 +2287,62 @@ export default class App extends React.Component {
         submitPassword: this.submitAcctPassword,
         busy: s.acctBusy, error: s.acctError,
       },
+      apiAccess: (() => {
+        const chip = on => on ? { bg: 'rgba(var(--accent-rgb),0.16)', border: OLIVE, fg: 'var(--accent-deep)' } : { bg: 'var(--surface)', border: 'rgba(var(--ink-rgb),0.12)', fg: 'var(--muted)' }
+        const day = iso => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+        return {
+          open: s.tokensOpen, toggle: this.toggleTokens,
+          loaded: s.apiTokens != null,
+          rows: (s.apiTokens || []).map(t => ({
+            id: t.id, name: t.name,
+            scopeText: (t.abilities || []).join(' · '),
+            hint: [
+              t.lastUsedAt ? 'last used ' + this.elapsed(new Date(t.lastUsedAt).getTime()) + ' ago' : 'never used',
+              t.expiresAt ? 'expires ' + day(t.expiresAt) : 'never expires',
+            ].join(' · '),
+            armed: s.revokeTokenArmId === t.id,
+            arm: () => this.setState({ revokeTokenArmId: t.id }),
+            disarm: () => this.setState({ revokeTokenArmId: null }),
+            revoke: () => this.revokeApiToken(t.id),
+          })),
+          addOpen: s.tokenAddOpen,
+          toggleAdd: () => this.setState(x => ({ tokenAddOpen: !x.tokenAddOpen, tokenName: '', tokenScopes: [], tokenExpiry: 90, tokenError: null })),
+          name: s.tokenName, setName: e => this.setState({ tokenName: e.target.value, tokenError: null }),
+          scopeChips: Object.entries(s.apiScopes || {}).map(([key, label]) => {
+            const on = s.tokenScopes.includes(key)
+            return { key, label, onTap: () => this.setState(x => ({ tokenScopes: on ? x.tokenScopes.filter(k => k !== key) : [...x.tokenScopes, key], tokenError: null })), ...chip(on) }
+          }),
+          expiryChips: [[30, '30 days'], [90, '90 days'], [365, '1 year'], [null, 'No expiry']].map(([val, label]) => ({
+            key: String(val), label, onTap: () => this.setState({ tokenExpiry: val }), ...chip(s.tokenExpiry === val),
+          })),
+          submit: this.createApiToken, busy: s.tokenBusy, error: s.tokenError,
+          canCreate: !!s.tokenName.trim() && s.tokenScopes.length > 0 && !s.tokenBusy,
+          newToken: s.newToken, copyNew: this.copyApiToken,
+        }
+      })(),
+      mqtt: (() => {
+        const cfg = s.mqttCfg, f = s.mqttForm
+        const beat = cfg?.heartbeatAt ? new Date(cfg.heartbeatAt).getTime() : null
+        const fresh = beat != null && Date.now() - beat < 5 * 60000
+        return {
+          open: s.mqttOpen, toggle: this.toggleMqtt,
+          loaded: cfg != null && f != null,
+          hint: cfg == null ? 'Sync sensors to your smart home'
+            : !cfg.enabled ? 'Off'
+              : fresh ? 'On · synced ' + this.elapsed(beat) + ' ago'
+                : 'On · broker unreachable',
+          enabled: !!f?.enabled, toggleEnabled: () => this.setMqttForm({ enabled: !f.enabled }),
+          host: f?.host ?? '', setHost: e => this.setMqttForm({ host: e.target.value }),
+          port: f?.port ?? '', setPort: e => this.setMqttForm({ port: e.target.value === '' ? '' : Number(e.target.value) }),
+          username: f?.username ?? '', setUsername: e => this.setMqttForm({ username: e.target.value }),
+          password: f?.password ?? '', setPassword: e => this.setMqttForm({ password: e.target.value }),
+          pwPlaceholder: cfg?.hasPassword ? '•••• saved' : 'Password',
+          tls: !!f?.tls, toggleTls: () => this.setMqttForm({ tls: !f.tls }),
+          tlsVerify: f?.tls_verify !== false, toggleTlsVerify: () => this.setMqttForm({ tls_verify: !f.tls_verify }),
+          test: this.testMqtt, save: this.saveMqtt,
+          busy: s.mqttBusy, testResult: s.mqttTestResult, error: s.mqttError,
+        }
+      })(),
       logout: () => this.doLogout(true),
       invitePending: s.invitePending, inviteCode: s.inviteCode, inviteMailed: s.inviteMailed,
     }
@@ -3077,6 +3249,155 @@ export default class App extends React.Component {
                 </label>
                 <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Pick the CSV files Baby Buddy exports (one per type) — you can select several at once, and importing the same file twice won’t duplicate anything.</div>
               </div>
+
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <button type="button" onClick={v.apiAccess.toggle} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 40)' }}>key</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>API access</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>Tokens for other apps and AI assistants</div>
+                  </div>
+                  <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>{v.apiAccess.open ? 'expand_less' : 'expand_more'}</Sym>
+                </button>
+                {v.apiAccess.open && (
+                  <>
+                    {!v.apiAccess.loaded && (
+                      <div style={S('font-size:12px;color:#B5AC98;padding:6px 0 4px 29px')}>One sec…</div>
+                    )}
+                    {v.apiAccess.loaded && !v.apiAccess.rows.length && (
+                      <div style={S('font-size:12px;color:#B5AC98;padding:6px 0 4px 29px;text-wrap:pretty')}>Nothing yet — make a token and other apps can read or write this log as you.</div>
+                    )}
+                    {v.apiAccess.rows.map(t => (
+                      <div key={t.id} style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                        <Sym style={{ fontSize: 18, color: 'var(--soft)' }}>vpn_key</Sym>
+                        <div style={S('flex:1;min-width:0')}>
+                          <div style={S('font-size:14px;font-weight:600;color:#4E4A3F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{t.name}</div>
+                          <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{t.scopeText}</div>
+                          <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>{t.hint}</div>
+                        </div>
+                        {!t.armed && (
+                          <button type="button" onClick={t.arm} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#A85A45;cursor:pointer")}>Revoke</button>
+                        )}
+                        {t.armed && (
+                          <>
+                            <button type="button" onClick={t.revoke} style={S("flex-shrink:0;background:#A85A45;border:none;border-radius:999px;padding:7px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#FCFBF6;cursor:pointer")}>Yes, revoke</button>
+                            <button type="button" onClick={t.disarm} className="hov-bd" style={S("flex-shrink:0;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:6px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11px;color:#8C8474;cursor:pointer")}>Keep</button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                    {v.apiAccess.newToken && (
+                      <div style={S('display:flex;flex-direction:column;gap:6px;padding:9px 0 10px 29px;border-top:1px solid rgba(38,35,29,0.07)')}>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>Your new token</div>
+                        <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:13px;letter-spacing:0.02em;color:#26231D;word-break:break-all")}>{v.apiAccess.newToken}</div>
+                        <div>
+                          <button type="button" onClick={v.apiAccess.copyNew} className="hov-bd" style={S("background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;padding:5px 11px;font-family:'Nunito',sans-serif;font-weight:600;font-size:10.5px;color:#8C8474;cursor:pointer")}>Copy</button>
+                        </div>
+                        <div style={S('font-size:11.5px;color:#B5AC98;text-wrap:pretty')}>You won’t see this again — copy it now.</div>
+                      </div>
+                    )}
+                    {v.apiAccess.loaded && (
+                      <>
+                        <button type="button" onClick={v.apiAccess.toggleAdd} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07);cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                          <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>add_circle</Sym>
+                          <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>New token</div>
+                          <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>{v.apiAccess.addOpen ? 'expand_less' : 'expand_more'}</Sym>
+                        </button>
+                        {v.apiAccess.addOpen && (
+                          <div style={S('display:flex;flex-direction:column;gap:8px;padding:2px 0 10px 29px')}>
+                            <input placeholder="What’s it for? — Home Assistant, Claude…" value={v.apiAccess.name} onChange={v.apiAccess.setName} maxLength={40} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                            <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>What it may do</div>
+                            <div style={S('display:flex;flex-wrap:wrap;gap:6px')}>
+                              {v.apiAccess.scopeChips.map(c => (
+                                <button key={c.key} type="button" onClick={c.onTap} style={S(`background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:7px 12px;font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:${c.fg};cursor:pointer;text-align:left`)}>{c.label}</button>
+                              ))}
+                            </div>
+                            <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474")}>Expires</div>
+                            <div style={S('display:flex;gap:6px')}>
+                              {v.apiAccess.expiryChips.map(c => (
+                                <button key={c.key} type="button" onClick={c.onTap} style={S(`flex:1;background:${c.bg};border:1px solid ${c.border};border-radius:999px;padding:8px 6px;font-family:inherit;font-size:12.5px;font-weight:600;color:${c.fg};cursor:pointer`)}>{c.label}</button>
+                              ))}
+                            </div>
+                            {v.apiAccess.error && (
+                              <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;text-wrap:pretty')}>{v.apiAccess.error}</div>
+                            )}
+                            <button type="button" onClick={v.apiAccess.submit} disabled={!v.apiAccess.canCreate} className="hov-olive" style={S(`align-self:flex-start;height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6;opacity:${v.apiAccess.canCreate ? '1' : '0.5'}`)}>{v.apiAccess.busy ? 'One sec…' : 'Create token'}</button>
+                            <div style={S('font-size:11.5px;color:#B5AC98;text-wrap:pretty')}>It can only do what you tick here — and only as your account.</div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {!v.apiAccess.addOpen && v.apiAccess.error && (
+                      <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;padding:2px 0 4px 29px;text-wrap:pretty')}>{v.apiAccess.error}</div>
+                    )}
+                  </>
+                )}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Tokens let other apps — scripts, Home Assistant, AI assistants over MCP — use this log as you. Revoking one stops it right away.</div>
+              </div>
+
+              {v.canManage && (
+              <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
+                <button type="button" onClick={v.mqtt.toggle} className="hov-row" style={S('width:100%;background:none;border:none;display:flex;align-items:center;gap:11px;padding:9px 0;cursor:pointer;font-family:inherit;text-align:left;border-radius:10px')}>
+                  <Sym style={{ fontSize: 18, color: 'oklch(0.60 0.075 170)' }}>home_iot_device</Sym>
+                  <div style={S('flex:1;min-width:0')}>
+                    <div style={S('font-size:14px;font-weight:600;color:#4E4A3F')}>Home Assistant</div>
+                    <div style={S('font-size:11.5px;color:#B5AC98;padding-top:1px')}>{v.mqtt.hint}</div>
+                  </div>
+                  <Sym style={{ fontSize: 18, color: 'var(--dim)' }}>{v.mqtt.open ? 'expand_less' : 'expand_more'}</Sym>
+                </button>
+                {v.mqtt.open && !v.mqtt.loaded && !v.mqtt.error && (
+                  <div style={S('font-size:12px;color:#B5AC98;padding:6px 0 4px 29px')}>One sec…</div>
+                )}
+                {v.mqtt.open && !v.mqtt.loaded && v.mqtt.error && (
+                  <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;padding:2px 0 4px 29px;text-wrap:pretty')}>{v.mqtt.error}</div>
+                )}
+                {v.mqtt.open && v.mqtt.loaded && (
+                  <>
+                    <div style={S('display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid rgba(38,35,29,0.07)')}>
+                      <Sym style={{ fontSize: 18, color: 'var(--accent)' }}>sync</Sym>
+                      <div style={S('flex:1;font-size:14px;font-weight:600;color:#4E4A3F')}>Publish to MQTT</div>
+                      <button type="button" onClick={v.mqtt.toggleEnabled} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                        <Sym style={{ fontSize: 22, color: v.mqtt.enabled ? 'var(--accent)' : 'var(--dim)' }}>{v.mqtt.enabled ? 'toggle_on' : 'toggle_off'}</Sym>
+                      </button>
+                    </div>
+                    <div style={S('display:flex;flex-direction:column;gap:8px;padding:2px 0 10px 29px')}>
+                      <input placeholder="Host" value={v.mqtt.host} onChange={v.mqtt.setHost} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                      <input placeholder="Port" type="number" value={v.mqtt.port} onChange={v.mqtt.setPort} style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                      <input placeholder="Username" value={v.mqtt.username} onChange={v.mqtt.setUsername} autoComplete="off" style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                      <input placeholder={v.mqtt.pwPlaceholder} type="password" value={v.mqtt.password} onChange={v.mqtt.setPassword} autoComplete="new-password" style={S('width:100%;box-sizing:border-box;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;padding:11px 16px;font-size:14.5px;color:#26231D;outline:none')} />
+                      <div style={S('display:flex;align-items:center;gap:11px;padding:2px 0')}>
+                        <div style={S('flex:1;font-size:13px;color:#6E6659')}>Use TLS</div>
+                        <button type="button" onClick={v.mqtt.toggleTls} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                          <Sym style={{ fontSize: 20, color: v.mqtt.tls ? 'var(--accent)' : 'var(--dim)' }}>{v.mqtt.tls ? 'toggle_on' : 'toggle_off'}</Sym>
+                        </button>
+                      </div>
+                      {v.mqtt.tls && (
+                        <div style={S('display:flex;align-items:center;gap:11px;padding:2px 0')}>
+                          <div style={S('flex:1;font-size:13px;color:#6E6659')}>Verify certificate</div>
+                          <button type="button" onClick={v.mqtt.toggleTlsVerify} style={S('background:none;border:none;padding:0;cursor:pointer;display:flex')}>
+                            <Sym style={{ fontSize: 20, color: v.mqtt.tlsVerify ? 'var(--accent)' : 'var(--dim)' }}>{v.mqtt.tlsVerify ? 'toggle_on' : 'toggle_off'}</Sym>
+                          </button>
+                        </div>
+                      )}
+                      {v.mqtt.testResult?.ok && (
+                        <div style={S('font-size:12.5px;line-height:1.4;font-weight:600;color:oklch(0.60 0.075 145)')}>Connected ✓</div>
+                      )}
+                      {v.mqtt.testResult && !v.mqtt.testResult.ok && (
+                        <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;text-wrap:pretty')}>{v.mqtt.testResult.message}</div>
+                      )}
+                      {v.mqtt.error && (
+                        <div style={S('font-size:12.5px;line-height:1.4;color:#A85A45;text-wrap:pretty')}>{v.mqtt.error}</div>
+                      )}
+                      <div style={S('display:flex;gap:8px')}>
+                        <button type="button" onClick={v.mqtt.test} disabled={v.mqtt.busy} className="hov-bd" style={S(`height:42px;padding:0 18px;background:none;border:1px solid rgba(38,35,29,0.14);border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#8C8474;opacity:${v.mqtt.busy ? '0.5' : '1'}`)}>Test connection</button>
+                        <button type="button" onClick={v.mqtt.save} disabled={v.mqtt.busy} className="hov-olive" style={S(`height:42px;padding:0 18px;background:var(--accent);border:none;border-radius:999px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700;color:#FCFBF6;opacity:${v.mqtt.busy ? '0.5' : '1'}`)}>{v.mqtt.busy ? 'One sec…' : 'Save'}</button>
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div style={S('font-size:12px;color:#B5AC98;padding-top:6px;text-wrap:pretty')}>Publishes to your MQTT broker so Home Assistant discovers sensors and buttons. See docs/home-assistant.md.</div>
+              </div>
+              )}
 
               <div style={S('background:#FFFDF8;border:1px solid rgba(38,35,29,0.07);border-radius:26px;box-shadow:0 2px 14px rgba(38,35,29,0.06);padding:6px 16px 12px;margin-top:12px')}>
                 <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;padding:10px 0 4px")}>Your account</div>
