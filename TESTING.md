@@ -43,6 +43,6 @@ Seeded from design intent + known soft spots — jot verdicts inline.
 
 ## Iteration parking lot
 
-Bigger ideas that surfaced — no commitment implied. See also [docs/known-limitations.md](docs/known-limitations.md) for the seeded backlog (settings screen, sleep timer, birth-date age, push notifications, email invites, data export…).
+Bigger ideas that surfaced — no commitment implied. See also [docs/known-limitations.md](docs/known-limitations.md) for the remaining known gaps (no custom entry types or notes, no month view, household-level shifts, no admin tooling…).
 
 - 
