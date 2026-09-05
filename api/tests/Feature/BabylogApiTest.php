@@ -199,17 +199,23 @@ class BabylogApiTest extends TestCase
         $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->assertOk();
     }
 
-    public function test_tokens_expire_after_ninety_days(): void
+    public function test_tokens_expire_after_ninety_idle_days(): void
     {
+        // the 90-day window slides with use (TokenExpiryTest has the aging
+        // matrix): using a token near the end of its window renews it
         $this->register('Ben', 'ben@example.com');
         $old = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
 
-        // day 89: still inside the window
+        // day 89: still inside the window — and this use restarts it
         $this->travel(89)->days();
         $this->getJson('/api/state?since=0', $this->authed($old))->assertOk();
 
-        // day 91: past it — the stale token is dead, a fresh login works
+        // day 91: alive, because it was last used two days ago
         $this->travel(2)->days();
+        $this->getJson('/api/state?since=0', $this->authed($old))->assertOk();
+
+        // 91 more idle days: dead — a fresh login works
+        $this->travel(91)->days();
         $this->getJson('/api/state?since=0', $this->authed($old))->assertUnauthorized();
         $fresh = $this->postJson('/api/login', ['email' => 'ben@example.com', 'password' => 'password123'])->json('token');
         $this->getJson('/api/state?since=0', $this->authed($fresh))->assertOk();

@@ -28,8 +28,6 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 ## Technical debt / release gates
 
 - **Community Apps entry not yet submitted.** [deploy/unraid/ca-template.xml](../deploy/unraid/ca-template.xml) and the runbook in [docs/ca-submission.md](ca-submission.md) are ready, but submission needs the `v1.0.0` tag pushed and the GHCR package flipped public first.
-- `artisan serve` (8 workers) as the production server — fine for 2 users; FPM/Octane if scope grows.
-- Sanctum token expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
-- nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
+- Rate limits key on the direct peer unless `TRUSTED_PROXIES` is set (operations.md "Remote access") — an unconfigured reverse-proxy setup gets instance-wide caps, which is safe but coarse.
 - Frontend tests (`npm test`, Vitest) cover the support modules and the app-shell flows — auth, boot-from-cache, offline, outbox flush — but not the deep UI (log sheet, history drill-down, shift sheet, settings). The class-component + `renderVals()` structure was chosen for design fidelity; extracting screens into components would make the rest testable.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.

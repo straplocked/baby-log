@@ -1,6 +1,6 @@
 # Architecture
 
-mybabynotes is three containers behind one nginx, built for one household sharing its babies' log — up to six grown-ups (parents and caregivers) and up to ten children. (The Unraid/CA build collapses the same three processes into a single all-in-one container — nginx, `artisan serve`, Reverb, and the scheduler under supervisord, secrets self-generated into `/data/.env` on first boot; see [deploy/aio/](../deploy/aio/) and [docs/operations.md](operations.md).)
+mybabynotes is three containers behind one nginx, built for one household sharing its babies' log — up to six grown-ups (parents and caregivers) and up to ten children. (The Unraid/CA build collapses the same three processes into a single all-in-one container — nginx, php-fpm, Reverb, and the scheduler under supervisord, secrets self-generated into `/data/.env` on first boot; see [deploy/aio/](../deploy/aio/) and [docs/operations.md](operations.md).)
 
 ```
                     ┌─────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ HTTPS origin the app already needs.
   throttled to one per 10 min per recipient so backfill bursts don't rattle
   anyone).
 - **Reminder pushes** come from `babylog:reminders`, run every minute by a
-  `schedule:work` process the api container starts next to `artisan serve`:
+  `schedule:work` process the api container starts next to php-fpm:
   feed gap and wake window per non-archived child (learned cluster-aware rhythm
   or a fixed interval, optionally only while on duty; wake windows use each
   child's birth date; entries with a NULL `baby_id` read as the primary child),
@@ -108,4 +108,4 @@ Laravel 13, SQLite, Sanctum bearer tokens.
 | Tombstone deletes | Deletes must sync across devices like any write |
 | Reports computed from entries | No snapshot to drift out of sync; the log is the single source of truth |
 | SQLite | A handful of users per instance; zero ops; the whole DB is one backup-able file |
-| `artisan serve` + 8 workers in prod | Adequate for a ≤6-user appliance; swap for FPM/Octane if this ever becomes multi-tenant |
+| php-fpm (8 static workers) behind a loopback nginx in prod | Plenty for a ≤6-user appliance; revisit pool sizing if this ever becomes multi-tenant |

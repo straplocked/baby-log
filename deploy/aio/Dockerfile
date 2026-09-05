@@ -1,7 +1,7 @@
-# All-in-one image for Unraid Community Apps: nginx (PWA + /api + /app ws
-# proxy), the Laravel API (artisan serve, 8 workers), Reverb, and
-# schedule:work — one container, supervised by supervisord (one small,
-# boring package; we don't need s6's service graph for four flat processes).
+# All-in-one image for Unraid Community Apps: nginx (PWA + /api fastcgi +
+# /app ws proxy), the Laravel API (php-fpm), Reverb, and schedule:work — one
+# container, supervised by supervisord (one small, boring package; we don't
+# need s6's service graph for four flat processes).
 #
 # Build from the repo root:
 #   docker build -f deploy/aio/Dockerfile -t mybabynotes-aio .
@@ -32,7 +32,7 @@ COPY api/ .
 RUN composer dump-autoload --optimize --no-dev
 
 # ---- Runtime ----
-FROM php:8.4-cli-alpine
+FROM php:8.4-fpm-alpine
 # gmp speeds up the Web Push EC crypto (pure-PHP fallback works but is slow)
 RUN apk add --no-cache gmp gmp-dev nginx supervisor openssl \
     && docker-php-ext-install pcntl gmp bcmath \
@@ -41,9 +41,12 @@ WORKDIR /var/www/html
 COPY --from=deps /app /var/www/html
 COPY --from=webbuild /app/dist /usr/share/nginx/html
 COPY deploy/aio/nginx.conf /etc/nginx/http.d/default.conf
+# zzz- so it sorts after the base image's zz-docker.conf and wins
+COPY api/fpm.conf /usr/local/etc/php-fpm.d/zzz-babylog.conf
 COPY deploy/aio/supervisord.conf /etc/supervisord.conf
 COPY deploy/aio/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data /run/nginx
+COPY real-ip.sh /usr/local/bin/real-ip.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/real-ip.sh && mkdir -p /data /run/nginx
 
 # Static wiring for the single-container layout (parity with
 # deploy/unraid/docker-compose.yml). Secrets are NOT here — they are
@@ -63,8 +66,7 @@ ENV APP_NAME="mybabynotes" \
     REVERB_PORT=8080 \
     REVERB_SCHEME=http \
     REVERB_APP_MAX_CONNECTIONS=100 \
-    REVERB_APP_RATE_LIMITING_ENABLED=true \
-    PHP_CLI_SERVER_WORKERS=8
+    REVERB_APP_RATE_LIMITING_ENABLED=true
 
 EXPOSE 80
 VOLUME /data

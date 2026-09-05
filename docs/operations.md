@@ -16,7 +16,7 @@ Containers (compose project `baby-log`, from `src/deploy/unraid/docker-compose.y
 | Container | Role | Exposure |
 |---|---|---|
 | `baby-log-app` | nginx: PWA + `/api` + `/app` ws proxy | host port **3500** |
-| `baby-log-api` | Laravel (`artisan serve`, 8 workers), migrates on boot | internal only |
+| `baby-log-api` | Laravel (php-fpm behind a loopback nginx), migrates on boot | internal only |
 | `baby-log-reverb` | websocket server | internal only |
 
 ## Update / install
@@ -42,6 +42,8 @@ On a generic Docker Compose install (the repo-root compose file), the database l
 Point your reverse proxy (e.g. Nginx Proxy Manager) at the app container: `your-domain → http://<nas-ip>:3500` with **websocket support enabled** (required for Reverb), plus the usual Force SSL / HTTP/2 / Let's Encrypt cert.
 
 If realtime breaks remotely but works on LAN, check the websocket toggle on the proxy host first.
+
+**Rate limiting behind the proxy**: by default nginx's rate limits key on the direct peer — behind a reverse proxy that's the proxy itself, making the caps instance-wide. Set `TRUSTED_PROXIES` to the proxy's IP or CIDR (comma-separated for several hops) and the limits key on real client addresses instead: on the compose-based script install append `TRUSTED_PROXIES=<proxy-ip>` to `/mnt/user/appdata/baby-log/.env` and run `babylog-update`; on the CA install it's an advanced container variable. Only name proxies you control — this tells nginx to believe their `X-Forwarded-For`.
 
 ## Registration policy
 
@@ -120,7 +122,7 @@ The GitHub repo was renamed `straplocked/baby-log` → `straplocked/mybabynotes`
 
 ## All-in-one image (Community Apps)
 
-[deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` + `/app` ws proxy on port 80), `artisan serve` (8 workers), Reverb, and `schedule:work` running; everything else matches the three-container compose stack.
+[deploy/aio/Dockerfile](../deploy/aio/Dockerfile) builds the whole stack into **one** container — CA users expect one-click single containers. Inside: supervisord keeps nginx (PWA + `/api` fastcgi + `/app` ws proxy on port 80), php-fpm, Reverb, and `schedule:work` running; everything else matches the three-container compose stack.
 
 ```bash
 docker build -f deploy/aio/Dockerfile -t mybabynotes-aio .        # from the repo root

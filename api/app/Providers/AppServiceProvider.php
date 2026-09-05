@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Contracts\AccountProvisioner;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -25,6 +27,18 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // sanctum.expiration counts from login, which would log a daily-use
+        // phone out every ~90 days anyway. Slide the window instead: a token
+        // stays live while its last use is inside the window, so only a
+        // genuinely idle device ever re-sees the login screen. (Sanctum
+        // stamps last_used_at on every authenticated request.)
+        Sanctum::authenticateAccessTokensUsing(function (PersonalAccessToken $token, bool $isValid) {
+            if ($isValid) {
+                return true;
+            }
+            $minutes = config('sanctum.expiration');
+
+            return $minutes !== null && (bool) $token->last_used_at?->gt(now()->subMinutes($minutes));
+        });
     }
 }

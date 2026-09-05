@@ -39,6 +39,11 @@ ln -sf /data/.env /var/www/html/.env
 : "${DB_DATABASE:=/data/database.sqlite}"
 [ -f "$DB_DATABASE" ] || touch "$DB_DATABASE"
 
+# fpm workers run as www-data (artisan serve ran as root): the SQLite file +
+# its transient journal (dir write!), the generated .env, and storage/ for
+# compiled mail views and the file cache must be readable/writable by them
+chown -R www-data:www-data /data /var/www/html/storage /var/www/html/bootstrap/cache
+
 # The PWA bundle bakes a placeholder Reverb key at image build time; stamp
 # this instance's real key (public by protocol design, but per-instance) over
 # it. On a plain restart the stamp is already there — that's fine.
@@ -53,5 +58,8 @@ elif ! grep -rq "$REVERB_KEY" /usr/share/nginx/html/assets 2>/dev/null; then
 fi
 
 php artisan migrate --force
+
+# opt-in realip for the rate-limit zones (TRUSTED_PROXIES env)
+/usr/local/bin/real-ip.sh
 
 exec supervisord -c /etc/supervisord.conf

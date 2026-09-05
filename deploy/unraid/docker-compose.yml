@@ -49,6 +49,10 @@ services:
       args:
         VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-babylog-key}
     container_name: baby-log-app
+    environment:
+      # reverse-proxy IPs/CIDRs allowed to speak for clients via
+      # X-Forwarded-For; empty = rate limits key on the direct peer
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     ports:
       - "${APP_PORT:-3500}:80"
     depends_on:
