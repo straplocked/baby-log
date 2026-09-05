@@ -122,8 +122,14 @@ Releases are tagged: a `v*` tag runs the test suite, publishes `ghcr.io/straploc
 | [TESTING.md](TESTING.md) | Trial-period journal — the feedback that drives iteration |
 | [CLAUDE.md](CLAUDE.md) | Conventions for AI-assisted development sessions |
 
+## Contributing
+
+Bug reports, docs fixes, and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, project invariants, and the test commands. Contributions require a one-time [CLA signature](CLA.md) (a bot handles it on your first PR); the why is explained openly in the contributing guide. Security issues go through [private reporting](SECURITY.md), never public issues, and the community follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
 ## License
 
 mybabynotes' code is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). Copyright © 2026 Chris Carvache.
 
 You can self-host it, modify it, and redistribute it under the AGPL's terms. The **mybabynotes name** and any **hosted mybabynotes service** are not covered by the code license — if you distribute a modified version or run a public instance, please make clear it's your build, not the official project.
+
+An official hosted edition (this codebase plus closed-source billing/tenancy components) is planned; the [CLA](CLA.md) is what lets community contributions ship in both editions. The open-source app is and stays fully functional on its own — nothing here is feature-gated.
