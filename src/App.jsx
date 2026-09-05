@@ -2640,7 +2640,7 @@ export default class App extends React.Component {
                 <div style={S('display:flex;align-items:center;justify-content:space-between;padding-bottom:14px')}>
                   <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>Feeds per day</div>
                   <div style={S('display:flex;align-items:center;gap:6px')}>
-                    <div style={S('width:9px;height:9px;border-radius:3px;background:var(--accent)')} />
+                    <div style={S('width:9px;height:9px;border-radius:3px;background:oklch(0.60 0.075 130)')} />
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:11.5px;color:#8C8474;letter-spacing:0.06em")}>{v.feedUnitLabel}</div>
                   </div>
                 </div>
