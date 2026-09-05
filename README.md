@@ -2,6 +2,8 @@
 
 **Your baby's data on your own server.** mybabynotes is a self-hosted baby tracker built for one household sharing its babies' log — two parents, or parents plus the caregivers they trust — with true realtime sync between every phone, offline logging that works at 3am with no signal, shift handoffs as a first-class flow, and CSV export of everything. One container, one SQLite file, no cloud account, no telemetry, no subscription rug-pulls.
 
+**Website: [mybabynotes.app](https://mybabynotes.app)**
+
 <!-- screenshots:start -->
 <p align="center">
   <img src="docs/media/now.png" alt="Now screen — since-cards, today's timeline, and the on-duty chip" width="30%">
@@ -15,11 +17,11 @@
 - **Three taps from pocket to logged.** The entry sheet opens pre-stamped with the current time and a prediction of what you're about to log (alternating nursing sides, last bottle amount, feed-vs-diaper rhythm). Overriding the guess costs one tap; backfilling costs one nudge (−5/−15/−1h).
 - **The whole household, one log — live.** Everyone joins by invite and sees the same log in realtime over websockets; with multiple children, pills on Now and History switch between each child's log. Entries write locally first and sync when there's signal, so 3am logging never waits on the network; queued entries are marked until they flush.
 - **Shifts, not just a log.** "I need to sleep, take him" is a first-class flow: request a handoff with a note, the partner accepts with an auto-drafted plan from the baby's rhythm and an "until" time, logged feeds tick the plan off, the off-duty parent watches progress on a read-only shift card, a push pings both of you when the "until" passes, and handing back generates a shift summary instead of a "when did you…" conversation.
-- **Live timers, shared across phones.** Nursing, pumping, and sleep run as server-backed start/stop timers visible on both devices; stopping auto-logs the entry (pumping captures the amount at stop, sleep stamps the nap at wake-up).
-- **Now & History.** Since-cards (fed/diaper/slept/bath), today's totals, an editable timeline with one-shot undo (add, edit, or delete), 7-day stats and charts with tap-through day-by-day drill-down, a feeds-rhythm insight, and a live age header from the baby's birth date.
-- **Notifications without a cloud.** Self-hosted Web Push (VAPID keys generate themselves — no FCM/APNs account): handoff requests and handbacks, opt-in partner activity, feed-gap and wake-window reminders, a daily meds nudge, and quiet hours — all per-parent.
+- **Live timers, shared across phones.** Nursing, pumping, and sleep run as server-backed start/stop timers visible on both devices; stopping a nursing or sleep timer auto-logs the entry (sleep stamps the nap at wake-up), and stopping a pump timer opens the log sheet with the duration pre-filled so you can add the amount.
+- **Now & History.** Since-cards the household picks from six (fed, pumped, diaper, slept, bath, meds), today's totals, an editable timeline with one-shot undo (add, edit, or delete), 7-day stats and charts with tap-through day-by-day drill-down, a feeds-rhythm insight, and a live age header from the baby's birth date.
+- **Notifications without a cloud.** Self-hosted Web Push (VAPID keys generate themselves — no FCM/APNs account): handoff requests and handbacks, a partner starting a timer, opt-in partner activity, feed-gap and wake-window reminders, a daily meds nudge, and quiet hours — all per-parent.
 - **Your data, portable.** Export the full log or per-day summaries as CSV through the native share sheet ("Share with your pediatrician"); switching from Baby Buddy? Settings imports its CSV exports, idempotently.
-- **Made yours.** Household oz/ml units, a nameable daily med, toggleable entry types (pump, diapers, sleep, bath, meds), account settings (name, email, password, baby's name), and per-device dark mode that can ignore the OS schedule for that 3am feed.
+- **Made yours.** Household-shared accent and background themes, oz/ml units, a nameable daily med, toggleable entry types (pump, diapers, sleep, bath, meds), account settings (name, email, password, baby's name), and per-device dark mode that can ignore the OS schedule for that 3am feed.
 - **Invite-only by design.** The first account claims the instance and invites the rest of the household (emailed code with SMTP, shareable on-screen code without) — each invite as a **parent** (full control) or a **caregiver** (logs, timers, and shifts, but can't touch settings or membership). Password reset works the same way. Up to six adults and ten children per household — enough for a doula and twins, still an appliance, not a platform.
 
 ## Honest comparison: Baby Buddy
@@ -43,7 +45,7 @@ If you want growth charts, Home Assistant, or a non-English UI, run Baby Buddy �
 
 ### 1. Unraid (Community Apps)
 
-mybabynotes ships an all-in-one image (`ghcr.io/straplocked/mybabynotes-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, so until it appears in the store you can install it manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
+mybabynotes ships an all-in-one image (`ghcr.io/straplocked/mybabynotes-aio`) — one container serving the app, API, and websockets on a single port, with all state (SQLite + self-generated secrets) in one `/data` share. The CA template is [deploy/unraid/ca-template.xml](deploy/unraid/ca-template.xml); the **CA listing is pending submission**, and the AIO image publishes with the first tagged release — until both exist, use option 3 to build from source. Once the image is up you can install the template manually: copy the template to `/boot/config/plugins/dockerMan/templates-user/` on your flash share, then Docker tab → Add Container → pick it from the Template dropdown.
 
 First boot generates every secret into `/data/.env` — nothing to configure on the LAN. Back up the one appdata folder and you've backed up the app. Pin a version by changing the repository tag from `:latest` to `:v1.0.0`.
 
@@ -55,7 +57,7 @@ For a compose-based install (separate app/api/reverb containers), one command in
 curl -fsSL https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh | sh
 ```
 
-The script resolves the latest tagged release, verifies its tarball against the published `checksums.txt`, and rebuilds; data survives in `appdata/baby-log/data`. Pin or roll back with `BABYLOG_REF`:
+The script resolves the latest tagged release and verifies its tarball against the published `checksums.txt` (until the first release exists it falls back to an **unverified** `main` tarball), then rebuilds; data survives in `appdata/baby-log/data`. Pin or roll back with `BABYLOG_REF`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/straplocked/mybabynotes/main/deploy/unraid/babylog.sh | BABYLOG_REF=v1.0.0 sh
@@ -77,7 +79,7 @@ Same as above — the root compose file is the full stack. The API test suite ru
 docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:2 php artisan test
 ```
 
-**Remote access (all installs):** on the LAN, plain HTTP works. For phones outside the LAN — and for the PWA install prompt and push notifications, which require HTTPS — put a reverse proxy with **websocket support** in front (Nginx Proxy Manager, SWAG, Caddy; enable websockets for the `/app` path) and set `APP_URL` to your public origin (e.g. `https://babylog.example.com`). Email (invite codes, password reset) is optional: configure SMTP via `MAIL_*` variables, or skip it and share invite codes from the screen.
+**Remote access (all installs):** on the LAN, plain HTTP works. For phones outside the LAN — and for the PWA install prompt and push notifications, which require HTTPS — put a reverse proxy with **websocket support** in front (Nginx Proxy Manager, SWAG, Caddy; enable websockets for the `/app` path) and set `APP_URL` to your public origin (e.g. `https://notes.example.com`). Email (invite codes, password reset) is optional: configure SMTP via `MAIL_*` variables, or skip it and share invite codes from the screen.
 
 ## Stack
 

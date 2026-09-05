@@ -29,11 +29,13 @@ Unraid webGui → **Settings → User Scripts → `babylog-update` → Run Scrip
 
 ## Wipe all data (testing)
 
-**Settings → User Scripts → `babylog-reset-data`** — stops api+reverb, deletes `database.sqlite`, restarts (migrations recreate it). Every account and entry is gone; **the next sign-up claims the instance**. Secrets are kept.
+**Settings → User Scripts → `babylog-reset-data`** — stops api+reverb, deletes `database.sqlite`, restarts (migrations recreate it). Every account and entry is gone; **the next sign-up claims the instance**. Secrets are kept. (Unlike `babylog-update`, this script lives only on the NAS — it isn't tracked in the repo, so recreate it by hand after a flash rebuild: stop api+reverb, `rm data/database.sqlite`, start.)
 
 ## Backups
 
 The entire state is one file: `/mnt/user/appdata/baby-log/data/database.sqlite` (plus `.env` for the secrets). Unraid's **Appdata Backup** plugin covers `appdata/baby-log` if installed — verify it's included in its share list. Manual restore: stop api+reverb, replace the sqlite file, start.
+
+On a generic Docker Compose install (the repo-root compose file), the database lives in the **named volume** `babylog-db`, not a host path — back it up with e.g. `docker run --rm -v babylog-db:/data -v "$PWD:/backup" alpine cp /data/database.sqlite /backup/`, plus your `.env`.
 
 ## Remote access (reverse proxy)
 
@@ -43,7 +45,7 @@ If realtime breaks remotely but works on LAN, check the websocket toggle on the 
 
 ## Registration policy
 
-Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): add `BABYLOG_OPEN_REGISTRATION: "true"` to the api service env in the Unraid compose and re-run the update script.
+Invite-only by default: the first sign-up claims a fresh instance; after that only invited emails with their single-use code can register. To open it up (not recommended while public): on the all-in-one/CA install, add a `BABYLOG_OPEN_REGISTRATION=true` container variable in Unraid's container editor. On the compose-based script install there is currently **no persistent way** — the update script replaces `src/` wholesale, so a hand-edit to the deployed compose file dies on the next update, and the variable isn't interpolated from the appdata `.env`. Treat it as unsupported there until the deploy compose passes the variable through.
 
 ## Enabling email (invite mail + password reset)
 
@@ -61,7 +63,7 @@ MAIL_FROM_ADDRESS=you@example.com
 
 Then run **`babylog-update`** once. That's required, not optional: compose only injects `.env` values into the containers when it (re)creates them, and the update script's `docker compose up -d` recreates api+reverb because their environment changed. Nothing else — no config cache to clear (the containers don't run `config:cache`), no manual container restarts.
 
-With mail on: invites also email the code to the partner (the on-screen code still works and stays the source of truth), and "Forgot password?" emails a reset link pointing at `APP_URL/?reset=…` — so `APP_URL` in that same `.env` must be the real public origin (e.g. `https://babylog.example.com`) or the links will point somewhere useless. A failed SMTP send never blocks an invite; it falls back to code-only (`mailed: false`).
+With mail on: invites also email the code to the partner (the on-screen code still works and stays the source of truth), and "Forgot password?" emails a reset link pointing at `APP_URL/?reset=…` — so `APP_URL` in that same `.env` must be the real public origin (e.g. `https://notes.example.com`) or the links will point somewhere useless. A failed SMTP send never blocks an invite; it falls back to code-only (`mailed: false`).
 
 ## Local development
 
@@ -88,7 +90,7 @@ Two accounts in one browser: open `http://localhost:3500` and `http://127.0.0.1:
 
 ## CI / images
 
-`.github/workflows/build-images.yml`: on every push to `main`, runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/mybabynotes-app` and `…-api` (`:main` + commit SHA).
+`.github/workflows/build-images.yml`: on every push to `main` (or manual `workflow_dispatch`), runs the API test suite, then (only if green) builds and pushes `ghcr.io/straplocked/mybabynotes-app` and `…-api` (`:main` + commit SHA).
 
 `.github/workflows/release.yml`: pushing a `v*` tag runs the same test suite, then builds and pushes all three images — `mybabynotes-app`, `mybabynotes-api`, and `mybabynotes-aio` — tagged `:vX.Y.Z` **and** `:latest` (releases own `:latest`; `main` builds never touch it), then creates a GitHub Release with generated notes, a `git archive` source tarball (`mybabynotes-vX.Y.Z.tar.gz`), and its sha256 in `checksums.txt`. The Unraid updater consumes that tarball + checksum; the images are the basis for the Unraid Community Apps template.
 
@@ -114,14 +116,14 @@ docker run -d -p 3500:80 -v /path/to/data:/data mybabynotes-aio
 - **`/data` is the instance**: `database.sqlite` + a `.env` holding the secrets. Back up that volume and you have everything.
 - **Secrets self-generate on first boot** (CA templates can't generate secrets): an empty `/data` gets a fresh `APP_KEY` and `REVERB_*` written to `/data/.env`; later boots reuse it. Migrations run on every boot.
 - The generated `REVERB_APP_KEY` is stamped into the served PWA bundle at boot (the image bakes a placeholder), so realtime works without any build-time coupling.
-- **Config**: set container env vars (`APP_URL`, `MAIL_*`, `REVERB_ALLOWED_ORIGINS`, `BABYLOG_OPEN_REGISTRATION`, …) in the template, or append them to `/data/.env` and restart the container — container env wins over the file. (Editing `REVERB_APP_KEY` itself needs a re**create**, so the fresh filesystem gets re-stamped.)
+- **Config**: set container env vars in Unraid's container editor (the template pre-declares `APP_URL` and `REVERB_ALLOWED_ORIGINS`; add `MAIL_*`, `BABYLOG_OPEN_REGISTRATION`, etc. as extra variables by hand), or append them to `/data/.env` and restart the container — container env wins over the file. (Editing `REVERB_APP_KEY` itself needs a re**create**, so the fresh filesystem gets re-stamped.)
 - Reverse proxy guidance is the same as above: point it at this container's port 80 with websocket support enabled.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| App up, changes not appearing on partner's phone | `docker logs baby-log-reverb`; NPM websocket toggle; client falls back to 60s polls so data still converges |
+| App up, changes not appearing on partner's phone | `docker logs baby-log-reverb`; NPM websocket toggle; client falls back to 20s polls so data still converges |
 | 500s from `/api` | `docker logs baby-log-api` (Laravel logs to stderr) |
 | "invite-only" on a legit partner signup | Exact email match required (lowercased) + the code from the invite toast; re-invite to regenerate a code |
 | Update script fails on compose | Compose Manager plugin must be installed (provides `docker compose`) |

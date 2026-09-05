@@ -68,7 +68,7 @@ mapped port, because:
 
 - the PWA install prompt and web-push notifications only exist on HTTPS origins;
 - realtime sync is a websocket at `/app` — without proxied websockets the app silently degrades to
-  60-second polling;
+  20-second polling;
 - `APP_URL` should then be set to the public origin (template's advanced variable) so emails and
   the push VAPID subject are correct.
 
@@ -109,10 +109,11 @@ URL exists).
 >   on the LAN. The first account registered claims the instance; registration is invite-only
 >   after that.
 > - Everything lives in the one appdata share (`database.sqlite` + `.env`). Back that folder up
->   and you've backed up the app. Losing the `.env` strands encrypted data — don't delete it.
+>   and you've backed up the app. Keep the `.env` with it — it holds the instance's secrets, and
+>   losing it means fresh keys and re-pairing realtime on next boot.
 > - **Remote access / phones outside the LAN:** put an HTTPS reverse proxy with **websocket
 >   support** in front (NPM, SWAG, Caddy). HTTPS is required for the PWA install prompt and push
->   notifications; without proxied websockets, live sync falls back to 60-second polling. Set the
+>   notifications; without proxied websockets, live sync falls back to 20-second polling. Set the
 >   `APP_URL` variable (Advanced view) to your public origin.
 > - Invite emails need SMTP (`MAIL_*` appended to `/data/.env`); without it the app shows a
 >   shareable invite code instead, so email is optional.

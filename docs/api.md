@@ -1,6 +1,6 @@
 # API Reference
 
-Base path `/api`. JSON in/out (`Accept: application/json`). Authenticated routes take `Authorization: Bearer <token>` (Sanctum). Validation failures return `422` with `{message, errors}`; throttling returns `429`; missing/бad auth returns `401`.
+Base path `/api`. JSON in/out (`Accept: application/json`). Authenticated routes take `Authorization: Bearer <token>` (Sanctum). Validation failures return `422` with `{message, errors}`; throttling returns `429`; missing/bad auth returns `401`.
 
 ## Auth
 
@@ -23,6 +23,23 @@ Returns `201 { "token": "…", "joinedPartner": bool }`. The first user of a hou
 ### `POST /logout` (auth)
 Revokes the current token.
 
+### `POST /forgot-password` — throttle 10/min
+`{ email }`. With SMTP configured, emails a reset token and returns `200 { sent: true }` **whether or not the account exists** (no account enumeration). Without SMTP it returns `200 { sent: false, reason: "mail-unconfigured" }` so the client can point at the invite-code fallback instead.
+
+### `POST /reset-password` — throttle 10/min
+`{ token, email, password (min 8) }` — consumes the emailed token and sets the new password; every one of the user's tokens is revoked (all devices sign out). Bad/used token → 422.
+
+## Account — all auth + throttle 120/min
+
+### `POST /account/profile`
+`{ name (≤100) }` → `{ ok, name }`, broadcasts an `account` poke (the name shows up in duty chips and handoffs).
+
+### `POST /account/email`
+`{ email, password }` — requires the current password; wrong password or already-used email → 422. Returns `{ ok, email }`.
+
+### `POST /account/password`
+`{ current_password, password (min 8) }` — wrong current password → 422. Revokes every **other** token (other devices sign out; the calling device stays in).
+
 ## Sync — all auth + throttle 120/min
 
 ### `GET /state?since=<rev>`
@@ -30,8 +47,9 @@ The single polling/converge endpoint.
 ```json
 {
   "user":    { "id": 1, "name": "Ben", "email": "ben@example.com", "role": "parent", "householdId": 1,
-               "notifyPrefs": { "handoff": true, "partner": false, "feed": false, "feedEvery": null,
-                                "onDutyOnly": true, "wake": false, "meds": false, "medsTime": "09:00",
+               "notifyPrefs": { "handoff": true, "timer": true, "partner": false, "feed": false,
+                                "feedEvery": null, "feedEveryByChild": {}, "onDutyOnly": true,
+                                "wake": false, "meds": false, "medsTime": "09:00",
                                 "quiet": false, "quietStart": "22:00", "quietEnd": "07:00", "tz": null } },
   "members": [ { "id": 1, "name": "Ben", "role": "parent" },
                { "id": 2, "name": "Katrina", "role": "parent" },
@@ -39,14 +57,18 @@ The single polling/converge endpoint.
   "children": [ { "id": 10, "name": "Wren", "age": "2–8 wks", "birthdate": "2026-07-20",
                   "archived": false } ],              // id-ordered; the first is the primary child
   "invites": [ { "email": "granny@example.com", "role": "caregiver" } ],  // pending, id-ordered
+  "formerMembers": [ { "id": 4, "name": "Doula Dana" } ],  // removed members, for naming their old entries
+  "limits":  { "maxMembers": 6, "maxChildren": 10 },
   "partner": { "id": 2, "name": "Katrina" },        // LEGACY: first other member, or null
   "invitePending": "granny@example.com",             // LEGACY: first pending invite's email, or null
   "baby":    { "name": "Wren", "age": "2–8 wks", "birthdate": "2026-07-20" },  // LEGACY: the primary child, or null
   "onDutyUserId": 1,
-  "settings": { "tracking": {"diapers": false}, "dismissed": ["meds"] },  // or null
-  "shift":   { "id": 3, "state": "requested|active|completed", "requester_id": 1,
+  "settings": { "tracking": {"diapers": false}, "dismissed": ["meds"], "widgets": ["feeds","sleep"],
+                "unit": "oz", "theme": {"accent":"plum","bg":"mist"}, "medName": "Vitamin D" },  // or null
+  "shift":   { "id": 3, "state": "requested|active|completed|cancelled", "requester_id": 1,
                "user_id": 2, "note": "…", "plan": [{"id":"p1","type":"bottle","at":1750000000000}],
-               "until": "Until 6 AM", "requested_at": 0, "started_at": 0, "ended_at": 0,
+               "until": "Until 6 AM", "until_at": 1750000000000, "until_notified_at": null,
+               "requested_at": 0, "started_at": 0, "ended_at": 0,
                "handback_note": "…" },               // latest row, or null
   "timer":   { "id": "uuid", "type": "nurse", "started_at": 0, "user_id": 1,
                "baby_id": 10 },                      // running timer, or null; baby_id null ⇒ primary child
@@ -76,7 +98,7 @@ Batch upsert from the client outbox (≤ 500 per call).
 `{ id?, name (≤100), age?, birthdate?, archived? }` — create (no `id`; 422 at the cap of `babylog.max_children`, default 10) or update (`id` must belong to the household, else 422 without a write) one child. Same key-presence rule as `/baby`. There is **no delete** — retiring a child only sets `archived: true` (its log is history worth keeping). Returns `{ ok, child }`, broadcasts a poke.
 
 ### `POST /invite` — parents only
-`{ email, role?: "parent"|"caregiver" (default parent) }` → `{ ok, code, mailed }`. Inserts a row in the `invites` table (lowercased email, hashed single-use code, role); **the plaintext code is returned only here** — with SMTP configured it is also emailed (`mailed: true`). Capacity counts members **plus outstanding invites** against `babylog.max_household_users` (default 6) → 422 when full. Re-inviting the same email replaces its row (fresh code, updated role) and doesn't take a second seat; multiple concurrent invites to different emails are fine.
+`{ email, role?: "parent"|"caregiver" (default parent) }` → `{ ok, code, mailed }`. Inserts a row in the `invites` table (lowercased email, hashed single-use code, role); **the plaintext code is returned only here** — with SMTP configured it is also emailed (`mailed: true`). Capacity counts members **plus outstanding invites** against `babylog.max_household_users` (default 6) → 422 when full. Re-inviting the same email replaces its row (fresh code, updated role) and doesn't take a second seat; multiple concurrent invites to different emails are fine. One quirk: this endpoint validates before checking the role, so a caregiver posting a *malformed* payload gets 422, not 403 (the 403 holds for well-formed requests).
 
 ### `POST /invite/revoke` — parents only
 `{ email }` — deletes the pending invite; its code stops opening doors immediately. Returns `{ ok }`, broadcasts a poke.
@@ -88,7 +110,7 @@ Batch upsert from the client outbox (≤ 500 per call).
 ```json
 { "tracking": { "diapers": false }, "dismissed": ["meds"] }
 ```
-Household-level preferences, shared by every member; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. `widgets` is the ordered list of "since last …" cards shown on the Now screen (from `feeds pump diapers sleep bath meds`; unknowns/duplicates dropped, client order kept; omitted/empty ⇒ the client's default set). `unit` is the display unit for bottle/pump amounts (`oz` or `ml`, default `oz`) — display only: entry `detail` amounts are always stored and synced in oz. Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
+Household-level preferences, shared by every member; last write wins. `tracking` maps a tracker key to on/off — keys outside `pump diapers sleep bath meds` are silently dropped (feeds can't be turned off). `dismissed` lists trackers whose "turn this off?" nudge was declined. `widgets` is the ordered list of "since last …" cards shown on the Now screen (from `feeds pump diapers sleep bath meds`; unknowns/duplicates dropped, client order kept; omitted/empty ⇒ the client's default set). `unit` is the display unit for bottle/pump amounts (`oz` or `ml`, default `oz`) — display only: entry `detail` amounts are always stored and synced in oz. `theme` is the household-shared palette: `accent` ∈ `olive clay rose plum sea denim`, `bg` ∈ `cream blush mist sage lilac` — any other value → 422; an absent key means the default (peach accent / cream background), which is why "peach" and plain "cream" are never stored. `medName` (nullable, ≤40, trimmed) names the daily med; clients show "Vitamin D" when blank. Each provided top-level key replaces the stored one wholesale. Returns `{ ok, settings }`, broadcasts a poke.
 
 ## Push notifications — all auth + throttle 120/min
 
@@ -102,7 +124,7 @@ Registers this device for Web Push. Upserts by `endpoint` — re-subscribing (or
 `{ endpoint }` — removes the caller's row for that endpoint (other users' rows are untouched). Expired endpoints also self-prune when a push bounces 404/410.
 
 ### `POST /notify-prefs`
-Any subset of the `notifyPrefs` keys shown in `/state`; provided keys merge over stored ones. `feedEvery` ∈ `null|120|150|180|210|240` (minutes; null = learned household rhythm), times are `HH:MM`. Per-user (each parent has their own), rides `/state`, pokes so the caller's other devices converge. Returns `{ ok, prefs }`.
+Any subset of the `notifyPrefs` keys shown in `/state`; provided keys merge over stored ones. `feedEvery` ∈ `null|120|150|180|210|240` (minutes; null = learned household rhythm), times are `HH:MM`. `feedEveryByChild` (`{childId: minutes}`) overrides `feedEvery` per child and replaces wholesale — keys for children outside the household and `null` values are silently dropped, not rejected. Per-user (each parent has their own), rides `/state`, pokes so the caller's other devices converge. Returns `{ ok, prefs }`.
 
 **What gets sent** (see [architecture.md](architecture.md#notifications)): handoff request/accept/handback pushes fire inline from the shift endpoints (respecting the recipient's `handoff` pref, ignoring quiet hours); member-activity pushes fire from `POST /entries` to every other member (opt-in, throttled to one per 10 min per recipient); feed-gap and wake-window reminders (per non-archived child) and the daily-meds nudge are sent by `babylog:reminders`, scheduled every minute.
 
@@ -121,7 +143,7 @@ Clears `active_timer`, broadcasts a poke. Returns `{ ok }`. The client logs the 
 Shifts are household-level (who has the kids), not per child. Any member — parent or caregiver — can take part.
 
 ### `POST /shifts/request`
-`{ note? }` — the on-duty member asks the rest of the household to take over; the push fans out to every other member. Asking again while a request is pending **refreshes it and re-pings** (a deliberate nudge, not a no-op).
+`{ note? }` — any member (on duty or not — there's no ownership check) asks the rest of the household to take over; the push fans out to every other member. Asking again while a request is pending **refreshes it and re-pings** (a deliberate nudge, not a no-op).
 
 ### `POST /shifts/accept`
 `{ plan?: [{id,type,at}] (≤20), until?, until_at? }` — accepts the pending request (or starts a shift outright). Accepting **your own** request → 422, the ask stays open. Sets duty to caller, `state=active`, returns the shift; the requester is pushed "you're covered", everyone else "…is on duty now". `at` is `numeric` and coerced to integer ms — the client derives it from an averaged feed gap, and a fractional value must never reject the whole handoff.

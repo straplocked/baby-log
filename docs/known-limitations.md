@@ -17,7 +17,7 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - **The daily meds nudge is household-level** — one dose tracked, not per child. (Feed reminders *do* have per-child intervals.)
 - **Shifts are household-level** ("who has the kids"), not per child. The shift sheet's drafted plan and "Right now" rows read the currently selected child's rhythm; there's no explicit per-child or all-children framing in the sheet.
 - **Members removed before 2026-09-04** have no name snapshot in `households.former_members`, so their old entries render without an attribution chip. Not recoverable.
-- **Timer stop and `/shifts/plan` have no ownership checks** — any member can stop the household timer; plan replaces only your own active shift. Noted in case it wants tightening.
+- **Timer stop has no ownership check at the API layer** — the client only lets the member who started a timer stop it, but the endpoint itself would accept anyone's stop. Not reachable from the UI; noted in case it wants tightening server-side. (`/shifts/plan` is fine — it only ever touches the caller's own active shift.)
 
 ## Shift-system edges
 
@@ -32,5 +32,5 @@ Honest list of what's missing, stubbed, or deliberately deferred — the startin
 - Sanctum token expiry counts from login, not last use — even a daily-use phone re-logs-in every ~90 days (the 401 lands on the login screen cleanly).
 - **No admin/first-user tooling**: wiping data is the only way to un-claim an instance (`babylog-reset-data`).
 - nginx rate limits key on the proxy's IP (instance-wide behind a reverse proxy/CDN) — acceptable for an appliance, worth revisiting with real-IP forwarding if it ever misfires.
-- Frontend has no test suite (the API has 81 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
+- Frontend has no test suite (the API has ~80 feature tests). The class-component + `renderVals()` structure was chosen for design fidelity; if iteration gets heavy, consider extracting screens into components with tests.
 - History rewrite note: pre-2026-09-02 commit SHAs changed when the leaked dev key was scrubbed. Old clones must re-clone.
