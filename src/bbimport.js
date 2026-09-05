@@ -1,6 +1,6 @@
 // ── Baby Buddy CSV import ────────────────────────────────────────────────────
-// Pure parsing + mapping (no DOM, no React) so scripts/check-bbimport.mjs can
-// exercise it in node against hand-written fixtures.
+// Pure parsing + mapping (no DOM, no React) so src/test/bbimport.test.js can
+// exercise it against hand-written fixtures.
 //
 // Baby Buddy exports one CSV per model via django-import-export; every file
 // starts with a header row (id, child_id, child_first_name, child_last_name,

@@ -1,4 +1,4 @@
-# Tagged releases: pushing a v* tag runs the API test suite, publishes all
+# Tagged releases: pushing a v* tag runs the test suites, publishes all
 # three images (app, api, aio) to GHCR as :vX.Y.Z + :latest, and creates a
 # GitHub Release carrying the source tarball the Unraid installer consumes
 # plus its sha256 in checksums.txt. GitHub's own /archive/ tarballs are not
@@ -34,8 +34,20 @@ jobs:
           BROADCAST_CONNECTION: log
         run: php artisan test --compact
 
+  test-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run app tests
+        run: npm test
+
   build:
-    needs: test
+    needs: [test, test-app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

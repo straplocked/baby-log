@@ -6,8 +6,9 @@ Two-parent baby-tracking PWA (React) + Laravel API + Reverb websockets, deployed
 
 - **PHP only runs in containers** on this dev machine (host PHP lacks extensions). Artisan/composer:
   `docker run --rm -v "$PWD/api:/app" -w /app composer:2 php artisan <cmd>`
-- **Tests must pass before pushing** — a push to `main` auto-builds public GHCR images, and the production Unraid updater pulls `main`:
+- **Tests must pass before pushing** — a push to `main` auto-builds public GHCR images, and the production Unraid updater pulls `main`. Both suites:
   `docker run --rm -v "$PWD/api:/app" -w /app -e BROADCAST_CONNECTION=log composer:2 php artisan test --compact`
+  `npm test` (frontend: Vitest + Testing Library in `src/test/`)
 - **Never commit secrets.** Dev secrets live in git-ignored `.env` (see `.env.example`); production generates its own on the NAS. A leaked key here already cost us a history rewrite.
 - **Ports 3500–3502 belong to this project** on the dev machine; everything else in 3xxx is taken by other projects.
 
