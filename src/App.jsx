@@ -232,10 +232,9 @@ export default class App extends React.Component {
       // concurrent timers (twins!): [{id, type, started_at, user_id, baby_id}]
       // in start order; timerSides remembers each nurse timer's pre-picked side
       // by timer id. timerSpot is a DEVICE-LOCAL pref (like selectedChildId)
-      // for where running timers appear: 'top' (one-tap-stop cards), 'today'
-      // (rows woven into the Today list, where stopArmId = the row tapped open
-      // to reveal its Stop button), or 'both'
-      activeTimers: [], timerSides: {}, stopArmId: null, timerSpot: 'both', manualDur: false,
+      // for where running timers appear: 'top' (cards), 'today' (rows woven
+      // into the Today list), or 'both' — either surface stops in one tap
+      activeTimers: [], timerSides: {}, timerSpot: 'both', manualDur: false,
       sheetDragY: 0, sheetDragging: false, sheetTall: false, sheetIn: false, sheetLeaving: false,
       toast: null, toastLeaving: false, undoAction: null,
       babyName: '', nameField: '', inviteField: '', age: '2–8 wks', babyBirthdate: null, dobField: '',
@@ -621,7 +620,7 @@ export default class App extends React.Component {
       plan: [], planDraft: null, planOff: [], handbackNote: '',
       settings: { tracking: {}, dismissed: [] }, settingsDirty: false,
       notifyPrefs: null, notifyPrefsDirty: false, pushOn: false,
-      activeTimers: [], timerSides: {}, stopArmId: null, manualDur: false,
+      activeTimers: [], timerSides: {}, manualDur: false,
       acctName: '', acctBabyName: '', acctOpen: null, acctError: null, acctBusy: false,
       acctEmail: '', acctEmailPw: '', acctPwCur: '', acctPwNew: '',
       apiTokens: null, apiScopes: null, tokensOpen: false, tokenAddOpen: false,
@@ -1151,7 +1150,7 @@ export default class App extends React.Component {
     this.setState(s => {
       const timerSides = { ...s.timerSides }
       delete timerSides[id]
-      return { activeTimers: s.activeTimers.filter(x => x.id !== id), timerSides, stopArmId: null }
+      return { activeTimers: s.activeTimers.filter(x => x.id !== id), timerSides }
     })
     api.timerStop(id).catch(() => this.setState({ offline: true })).finally(() => { this._timerBusy-- })
     // the entry belongs to the child the timer was started for — pill switches
@@ -1736,8 +1735,8 @@ export default class App extends React.Component {
       pending: pendingIds.has(e.id), byChip: byChipFor(e),
     }))
     // running timers woven into the Today list at their start time (timerSpot
-    // 'today' or 'both') — a live elapsed sub, and the previous two-step stop:
-    // tapping your own row arms its Stop button
+    // 'today' or 'both') — a live elapsed sub, and your own row carries its
+    // one-tap Stop, same rule as the top cards
     const feedTimerRows = (s.timerSpot || 'both') !== 'top' ? s.activeTimers.map(t => {
       const tt = T(t.type)
       const mine = !!(s.me && t.user_id === s.me.id)
@@ -1751,8 +1750,6 @@ export default class App extends React.Component {
           + (child ? ' · ' + child : '')
           + (mine ? '' : ' · ' + this.memberName(t.user_id, 'your partner')),
         icon: tt.icon, color: tt.color,
-        armed: s.stopArmId === t.id,
-        onTap: mine ? () => this.setState(x => ({ stopArmId: x.stopArmId === t.id ? null : t.id })) : undefined,
         onStop: () => this.stopTimer(t.id),
       }
     }) : []
@@ -2065,8 +2062,8 @@ export default class App extends React.Component {
       // running-timer cards at the top of Now (timerSpot 'top' or 'both') —
       // one per concurrent timer, in start order so cards stay put as new ones
       // append. With 2+ unarchived children each names its child (null baby_id
-      // = primary, same rule as entries). These are already running, so your
-      // own card stops in ONE tap; the two-step stop lives on the Today rows.
+      // = primary, same rule as entries). Your own card stops in one tap —
+      // same as your rows in the Today list.
       timers: ((s.timerSpot || 'both') === 'today' ? [] : s.activeTimers).map(t => {
         const tt = T(t.type)
         return {
@@ -2761,12 +2758,12 @@ export default class App extends React.Component {
                   <div style={S('padding:22px 16px;text-align:center;font-size:13.5px;color:#B5AC98;text-wrap:pretty')}>Nothing logged yet — tap + and you’re three taps from done.</div>
                 )}
                 {v.timeline.map((e, i) => e.timer ? (
-                  // a running timer holding its place in the day — tap arms the
-                  // in-row Stop (the two-step flow); the top card is the one-tap
-                  // box-sizing matters: entry rows are <button>s (border-box by
-                  // default) but this is a <div>, and without it the padding
-                  // pushes the right-side glyph past the card's overflow:hidden
-                  <div key={'timer-' + e.id} onClick={e.onTap} style={S(`width:100%;box-sizing:border-box;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;text-align:left${e.mine ? ';cursor:pointer' : ''}`)}>
+                  // a running timer holding its place in the day, with the same
+                  // one-tap Stop as the top card. box-sizing matters: entry rows
+                  // are <button>s (border-box by default) but this is a <div>,
+                  // and without it the padding pushes the right-side control
+                  // past the card's overflow:hidden
+                  <div key={'timer-' + e.id} style={S('width:100%;box-sizing:border-box;border-top:1px solid rgba(38,35,29,0.06);padding:13px 15px;display:flex;align-items:center;gap:12px;text-align:left')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12.5px;color:#6E6659;width:62px;flex-shrink:0;letter-spacing:-0.02em")}>{e.time}</div>
                     <div style={S('position:relative;width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0')}>
                       <div style={S(`position:absolute;inset:0;background:${e.color};opacity:0.16`)} />
@@ -2776,10 +2773,10 @@ export default class App extends React.Component {
                       <div style={S('font-size:15px;font-weight:600;letter-spacing:-0.01em')}>{e.label}</div>
                       <div style={S('font-size:11.5px;color:#8C8474;font-variant-numeric:tabular-nums')}>{e.sub}</div>
                     </div>
-                    {e.armed && e.mine ? (
-                      <button type="button" onClick={ev => { ev.stopPropagation(); e.onStop() }} className="hov-dark" style={S('height:34px;padding:0 14px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
+                    {e.mine ? (
+                      <button type="button" onClick={e.onStop} className="hov-dark" style={S('height:34px;padding:0 14px;background:#26231D;border:none;border-radius:999px;display:flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit;flex-shrink:0')}>
                         <Sym style={{ fontSize: 15, color: 'var(--bg)' }}>stop</Sym>
-                        <div style={S('font-size:12.5px;font-weight:700;color:#FAF6EF')}>Stop timer</div>
+                        <div style={S('font-size:12.5px;font-weight:700;color:#FAF6EF')}>Stop</div>
                       </button>
                     ) : (
                       <Sym style={{ fontSize: 18, color: e.color, flexShrink: 0 }}>timer</Sym>

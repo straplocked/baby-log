@@ -1,8 +1,8 @@
-// The multi-timer Now screen: every running timer is a card at the top (one-tap
-// Stop for its owner — it's already running, don't make them dig) and a row
-// holding its place in the Today list, where a tap arms the two-step Stop.
-// The device-local timerSpot pref picks the surface: 'top', 'today', or 'both'
-// (default). Timers started by someone else never offer a Stop anywhere.
+// The multi-timer Now screen: every running timer is a card at the top and a
+// row holding its place in the Today list, and its owner can stop it in one
+// tap from either surface. The device-local timerSpot pref picks the surface:
+// 'top', 'today', or 'both' (default). Timers started by someone else never
+// offer a Stop anywhere.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -75,10 +75,9 @@ describe('multi-timer rows', () => {
 
     expect(await screen.findByText('Nursing · You')).toBeInTheDocument()
     expect(screen.getByText('Sleep · Kat')).toBeInTheDocument()
-    // my card stops in one tap — the button is right there; Kat's never has one
-    expect(screen.getByText('Stop')).toBeInTheDocument()
-    // the two-step "Stop timer" only appears after arming a Today row
-    expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
+    // my timer stops in one tap on BOTH surfaces (top card + Today row);
+    // Kat's never has a Stop anywhere
+    expect(screen.getAllByText('Stop')).toHaveLength(2)
   })
 
   it('one tap on my top card stops that timer by id and logs the entry', async () => {
@@ -91,7 +90,7 @@ describe('multi-timer rows', () => {
     renderApp()
 
     await screen.findByText('Nursing · You')
-    await user.click(screen.getByText('Stop'))
+    await user.click(screen.getAllByText('Stop')[0]) // DOM order: the top card first
 
     expect(stopBody).toEqual({ id: 't-nurse' })
     // only my card went away — Kat's sleep timer keeps running
@@ -104,7 +103,7 @@ describe('multi-timer rows', () => {
     expect(pushed.entries[0].detail).toMatch(/· 2m$/)
   })
 
-  it('a Today-list row holds the timer too: tap arms it, Stop timer stops it', async () => {
+  it('the Today-list row stops in one tap too', async () => {
     const user = userEvent.setup()
     seedSignedIn()
     let stopBody
@@ -113,25 +112,22 @@ describe('multi-timer rows', () => {
     routes['POST /entries'] = () => okJson({ ok: true })
     renderApp()
 
-    // the feed rows carry the bare type labels (the top cards say "· You"/"· Kat")
-    await user.click(await screen.findByText('Nursing'))
-    await user.click(screen.getByText('Stop timer'))
+    await screen.findByText('Nursing · You')
+    await user.click(screen.getAllByText('Stop').at(-1)) // DOM order: the Today row last
 
     expect(stopBody).toEqual({ id: 't-nurse' })
     expect(await screen.findByText(/Nursing logged/)).toBeInTheDocument()
   })
 
   it('a timer someone else started never offers Stop', async () => {
-    const user = userEvent.setup()
     seedSignedIn()
     routes['GET /state'] = () => okJson(stateFixture({ timers: [twoTimers()[1]] }))
     renderApp()
 
-    // Kat's top card has no Stop, and tapping her Today row arms nothing
+    // neither Kat's top card nor her Today row has a Stop
     await screen.findByText('Sleep · Kat')
+    expect(screen.getByText('Sleep')).toBeInTheDocument()
     expect(screen.queryByText('Stop')).not.toBeInTheDocument()
-    await user.click(screen.getByText('Sleep'))
-    expect(screen.queryByText('Stop timer')).not.toBeInTheDocument()
   })
 
   it("timerSpot 'top' keeps the cards and hides the Today rows", async () => {
