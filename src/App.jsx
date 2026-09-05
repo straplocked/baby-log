@@ -1830,7 +1830,6 @@ export default class App extends React.Component {
       authInvite: s.authInvite, setAuthInvite: e => this.setState({ authInvite: e.target.value }),
       authEmail: s.authEmail, setAuthEmail: e => this.setState({ authEmail: e.target.value }),
       authPassword: s.authPassword, setAuthPassword: e => this.setState({ authPassword: e.target.value }),
-      socialTap: () => { this.setState({ toast: 'Email sign-in only for now', undoAction: null }); this.bumpToast() },
       forgotOpen: s.forgotOpen,
       toggleForgot: () => this.setState(x => ({ forgotOpen: !x.forgotOpen, forgotResult: null, forgotEmail: x.forgotEmail || x.authEmail })),
       forgotEmail: s.forgotEmail, setForgotEmail: e => this.setState({ forgotEmail: e.target.value, forgotResult: null }),
@@ -2267,15 +2266,6 @@ export default class App extends React.Component {
               <div style={S('font-size:17px;font-weight:700;color:#FCFBF6')}>{v.authCta}</div>
               <Sym style={{ fontSize: 21, color: 'var(--on-accent)' }}>arrow_forward</Sym>
             </button>
-            <div style={S('display:flex;align-items:center;gap:12px;padding:20px 0 14px')}>
-              <div style={S('flex:1;height:1px;background:rgba(38,35,29,0.10)')} />
-              <div style={S('font-size:12.5px;color:#B5AC98')}>or</div>
-              <div style={S('flex:1;height:1px;background:rgba(38,35,29,0.10)')} />
-            </div>
-            <div style={S('display:flex;flex-direction:column;gap:8px')}>
-              <button type="button" onClick={v.socialTap} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Apple</button>
-              <button type="button" onClick={v.socialTap} className="hov-cream" style={S('width:100%;height:52px;background:#FFFDF8;border:1px solid rgba(38,35,29,0.12);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;color:#26231D')}>Continue with Google</button>
-            </div>
             <div style={S('flex:1')} />
             <div style={S('font-size:12px;line-height:1.5;color:#B5AC98;text-align:center;padding-top:16px;text-wrap:pretty')}>Invited by a partner? Use the same email they sent it to and you’ll land in their log.</div>
           </div>
