@@ -3,11 +3,11 @@
    inline properties. S() (src/s.js) maps the comp's fixed palette onto these
    vars, so comp markup strings stay verbatim yet follow the theme. */
 :root {
-  --accent: #7C8C5A;
-  --accent-rgb: 124, 140, 90;
-  --accent-deep: #4A5533;
-  --accent-hover: #6B7A4C;
-  --accent-text: #5F6E42;
+  --accent: #E8957A;
+  --accent-rgb: 232, 149, 122;
+  --accent-deep: #B5566A;
+  --accent-hover: #D9846A;
+  --accent-text: #A34D62;
   --bg: #FAF6EF;
   --bg-rgb: 250, 246, 239;
   --surface: #FFFDF8;

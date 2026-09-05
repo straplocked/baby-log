@@ -3,8 +3,8 @@
    Assets + fonts: cache-first with background fill. */
 // bumping these purges old caches on activate — v1 served unhashed files
 // (manifest included) cache-first forever, so installs kept minting stale
-const SHELL = 'babylog-shell-v2'
-const RUNTIME = 'babylog-rt-v2'
+const SHELL = 'babylog-shell-v3'
+const RUNTIME = 'babylog-rt-v3'
 
 self.addEventListener('install', () => self.skipWaiting())
 

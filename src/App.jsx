@@ -1,6 +1,6 @@
 import React from 'react'
 import { S } from './s'
-import Duck from './Duck'
+import Logo, { Wordmark } from './Logo'
 import { api, getToken, setToken } from './api'
 import { startEcho, stopEcho, isEchoConnected } from './echo'
 import { pushSupported, pushSubscription, subscribePush, deviceTz } from './push'
@@ -111,10 +111,15 @@ const MAX_CHILDREN = 10
 const spellCount = n => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'][n] || String(n)
 
 // ── household theme (accent + background) ────────────────────────────────────
-// Every accent keeps olive's exact oklch lightness/chroma ladder (main ≈0.61/0.073,
-// deep ≈0.43/0.054, hover ≈0.56/0.069) so contrast holds at any hue; backgrounds
-// stay at cream's ≈0.97 lightness so ink text always reads.
+// Peach is the brand scheme (marketing comp Landing.dc.html) and carries explicit
+// values: its deep/text roles are plum — a different hue — so they can't be
+// derived from the accent like the others; `text`/`darkDeep`/`darkText` override
+// applyTheme's color-mix derivations when present. Every other accent keeps
+// olive's exact oklch lightness/chroma ladder (main ≈0.61/0.073, deep ≈0.43/0.054,
+// hover ≈0.56/0.069) so contrast holds at any hue; backgrounds stay at cream's
+// ≈0.97 lightness so ink text always reads.
 const THEME_ACCENTS = {
+  peach: { label: 'Peach', accent: '#E8957A', rgb: '232,149,122', deep: '#B5566A', hover: '#D9846A', text: '#A34D62', darkDeep: '#F4C2CC', darkText: '#E8A5B3' },
   olive: { label: 'Olive', accent: '#7C8C5A', rgb: '124,140,90', deep: '#4A5533', hover: '#6B7A4C' },
   clay: { label: 'Clay', accent: '#AB7663', rgb: '171,118,99', deep: '#6A4639', hover: '#966554' },
   rose: { label: 'Rose', accent: '#AB727E', rgb: '171,114,126', deep: '#6A434C', hover: '#96626D' },
@@ -140,7 +145,7 @@ const THEME_BGS_DARK = {
 }
 let appliedThemeSig = null
 function applyTheme(theme) {
-  const a = THEME_ACCENTS[theme?.accent] || THEME_ACCENTS.olive
+  const a = THEME_ACCENTS[theme?.accent] || THEME_ACCENTS.peach
   const bKey = THEME_BGS[theme?.bg] ? theme.bg : 'cream'
   const dark = isDark()
   const b = dark ? THEME_BGS_DARK[bKey] : THEME_BGS[bKey]
@@ -155,9 +160,9 @@ function applyTheme(theme) {
   r.setProperty('--accent-rgb', a.rgb)
   // accent text roles re-derive against the flipped neutrals: "deep" must be
   // the readable end, so in dark it mixes toward cream instead of black
-  r.setProperty('--accent-deep', dark ? `color-mix(in oklab, ${a.accent} 58%, #F2EDE2)` : a.deep)
+  r.setProperty('--accent-deep', dark ? (a.darkDeep || `color-mix(in oklab, ${a.accent} 58%, #F2EDE2)`) : a.deep)
   r.setProperty('--accent-hover', dark ? `color-mix(in oklab, ${a.accent} 84%, #14120F)` : a.hover)
-  r.setProperty('--accent-text', dark ? `color-mix(in oklab, ${a.accent} 68%, #F2EDE2)` : `color-mix(in oklab, ${a.accent} 74%, #26231D)`)
+  r.setProperty('--accent-text', dark ? (a.darkText || `color-mix(in oklab, ${a.accent} 68%, #F2EDE2)`) : (a.text || `color-mix(in oklab, ${a.accent} 74%, #26231D)`))
   r.setProperty('--bg', b.bg)
   r.setProperty('--bg-rgb', b.rgb)
   // there are light + dark media-split tags (index.html); the browser honors
@@ -2056,7 +2061,7 @@ export default class App extends React.Component {
       appearance: {
         accents: Object.entries(THEME_ACCENTS).map(([key, a]) => ({
           key, label: a.label, color: a.accent,
-          on: (s.settings.theme?.accent || 'olive') === key,
+          on: (s.settings.theme?.accent || 'peach') === key,
           onTap: () => this.setTheme({ accent: key }),
         })),
         bgs: Object.entries(THEME_BGS).map(([key, b]) => ({
@@ -2196,9 +2201,9 @@ export default class App extends React.Component {
           <div style={S('flex:1;display:flex;flex-direction:column;align-items:center;padding:0 24px 22px;position:relative;z-index:1;min-height:0')}>
             <div style={S('flex:1')} />
             <div style={S('width:168px;height:168px;border-radius:999px;background:#FFFDF8;box-shadow:0 14px 40px rgba(38,35,29,0.12);display:flex;align-items:center;justify-content:center')}>
-              <Duck size={116} />
+              <Logo size={116} />
             </div>
-            <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:40px;letter-spacing:-0.03em;color:var(--accent-deep);padding-top:26px")}>mybabynotes</div>
+            <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:40px;letter-spacing:-0.03em;padding-top:26px")}><Wordmark /></div>
             <div style={S('font-size:16.5px;line-height:1.45;color:#6E6659;text-align:center;padding-top:8px;text-wrap:pretty;max-width:260px')}>Three taps, then back to the baby.<br />Both of you, one log.</div>
             <div style={S('flex:1.2')} />
             <button type="button" onClick={v.goSignup} className="hov-olive" style={S('width:100%;height:60px;background:var(--accent);border:none;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(var(--accent-rgb),0.3)')}>
@@ -2218,8 +2223,8 @@ export default class App extends React.Component {
                 <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
               </button>
               <div style={S('display:flex;align-items:center;gap:6px')}>
-                <Duck size={30} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
+                <Logo size={30} />
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em")}><Wordmark /></div>
               </div>
               <div style={S('width:38px')} />
             </div>
@@ -2283,8 +2288,8 @@ export default class App extends React.Component {
                 <Sym style={{ fontSize: 20, color: 'var(--muted)' }}>arrow_back</Sym>
               </button>
               <div style={S('display:flex;align-items:center;gap:6px')}>
-                <Duck size={30} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
+                <Logo size={30} />
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:17px;letter-spacing:-0.02em")}><Wordmark /></div>
               </div>
               <div style={S('width:38px')} />
             </div>
@@ -2309,8 +2314,8 @@ export default class App extends React.Component {
           <div style={S('flex:1;display:flex;flex-direction:column;padding:24px 24px 20px;overflow:auto;position:relative;z-index:1;min-height:0')}>
             <div style={S('padding:6px 0 34px')}>
               <div style={S('display:flex;align-items:center;gap:6.4px')}>
-                <Duck size={32} />
-                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:19px;letter-spacing:-0.02em;color:var(--accent-deep)")}>mybabynotes</div>
+                <Logo size={32} />
+                <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:19px;letter-spacing:-0.02em")}><Wordmark /></div>
               </div>
             </div>
             <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:32px;line-height:1.1;letter-spacing:-0.025em;text-wrap:pretty")}>Who are we keeping track of?</div>
@@ -2355,7 +2360,7 @@ export default class App extends React.Component {
           <div style={S('flex:1;display:flex;flex-direction:column;min-height:0;position:relative;z-index:1')}>
             <div style={S('padding:10px 20px 14px;display:flex;align-items:center;justify-content:space-between')}>
               <div style={S('display:flex;align-items:center;gap:10px')}>
-                <Duck size={38} />
+                <Logo size={38} />
                 <div style={S('display:flex;flex-direction:column;gap:1px')}>
                   <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>{v.babyName}</div>
                   <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.ageLabel} · {v.dateLabel}{v.offline ? ' · offline' : ''}</div>
@@ -2572,7 +2577,7 @@ export default class App extends React.Component {
                 </>
               ) : (
                 <>
-                  <Duck size={38} />
+                  <Logo size={38} />
                   <div style={S('display:flex;flex-direction:column;gap:1px')}>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:800;font-size:23px;letter-spacing:-0.02em")}>Last 7 days</div>
                     <div style={S("font-family:'Nunito',sans-serif;font-weight:600;font-size:12px;color:#8C8474;letter-spacing:0.06em")}>{v.historySubtitle}</div>
