@@ -39,6 +39,8 @@ x-laravel-env: &laravel-env
   MAIL_PASSWORD: ${MAIL_PASSWORD:-null}
   MAIL_SCHEME: ${MAIL_SCHEME:-null}
   MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-hello@example.com}
+  # invite-only by default — see docs/operations.md "Registration policy"
+  BABYLOG_OPEN_REGISTRATION: "${BABYLOG_OPEN_REGISTRATION:-false}"
 
 services:
   app:
